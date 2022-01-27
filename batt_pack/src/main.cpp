@@ -8,8 +8,8 @@
 
 // ++++ Für die Schieberegister ++++
 #define NUMBER_OF_SHIFT_REGISTERS (2) // Anzahl der 8bit Shift Register die hintereinander geschaltet sind
-#define SHIFT_REGISTER_DATA_PIN_NO (3) // GPIO Pin Nummer über den die Daten für das Register eingestellt werden
-#define SHIFT_REGISTER_CLOCK_PIN_NO (1) // GPIO Pin Nummer über den die Pulse zum Übernehmen der Daten aus SHIFT_REGISTER_DATA_PIN_NO übertragen werden 
+#define SHIFT_REGISTER_DATA_PIN_NO (4) // GPIO Pin Nummer über den die Daten für das Register eingestellt werden
+#define SHIFT_REGISTER_CLOCK_PIN_NO (5) // GPIO Pin Nummer über den die Pulse zum Übernehmen der Daten aus SHIFT_REGISTER_DATA_PIN_NO übertragen werden 
 #define SHIFT_REGISTER_OUTPUT_PIN_NO (0) // GPIO Pin Nummer für den Latch Pin. Wenn hier ein Puls zu sehen ist werden die Daten aus dem Register in den Output übernommen
 
 // ++++ Für die Temperatursensoren ++++
@@ -41,10 +41,34 @@ uint8_t temp_sens_0_addr[8] = TEMP_SENS_ADDR_0;
 uint8_t temp_sens_1_addr[8] = TEMP_SENS_ADDR_1;
 uint8_t temp_sens_2_addr[8] = TEMP_SENS_ADDR_2;
 
+// ++++ Variablen für den ADC Kanal Schalter (CD74HC4067) ++++++++
+const uint8_t number_of_channel_select_pins=4;
+uint8_t adc_channel_pin_mapping[16][number_of_channel_select_pins]={
+    {0,0,0,0}, //channel 0
+    {1,0,0,0}, //channel 1
+    {0,1,0,0}, //channel 2
+    {1,1,0,0}, //channel 3
+    {0,0,1,0}, //channel 4
+    {1,0,1,0}, //channel 5
+    {0,1,1,0}, //channel 6
+    {1,1,1,0}, //channel 7
+    {0,0,0,1}, //channel 8
+    {1,0,0,1}, //channel 9
+    {0,1,0,1}, //channel 10
+    {1,1,0,1}, //channel 11
+    {0,0,1,1}, //channel 12
+    {1,0,1,1}, //channel 13
+    {0,1,1,1}, //channel 14
+    {1,1,1,1}  //channel 15
+  };
+
+
 
 //############# Funktionsprototypen ############
 void printAddress(DeviceAddress deviceAddress);
 void printTemperature(DeviceAddress deviceAddress);
+void select_adc_channel(uint8_t channel_number);
+void select_adc_channel_no_update(uint8_t channel_number);
 
 
 
@@ -65,10 +89,10 @@ void setup() {
   Serial.begin(9600);
 
   // Start up the library
-  temp_sensors.begin();
+  //temp_sensors.begin();
 
   // ACHTUNG: RX und TX Pin werden als GPIOs umdefiniert!
-  //shift_register_obj.begin(SHIFT_REGISTER_DATA_PIN_NO, SHIFT_REGISTER_CLOCK_PIN_NO, SHIFT_REGISTER_OUTPUT_PIN_NO);
+  shift_register_obj.begin(SHIFT_REGISTER_DATA_PIN_NO, SHIFT_REGISTER_CLOCK_PIN_NO, SHIFT_REGISTER_OUTPUT_PIN_NO);
 
   // pinMode(D1, OUTPUT);
   // digitalWrite(D1, schalterzustand);
@@ -86,17 +110,21 @@ void setup() {
 }
 
 void loop() {
-  int curr_sens_luefter_reading= 0;
-  float_t strom_sensor_luefter_strom = 0;
+  int curr_sens_luefter_reading_1= 0;
+  int curr_sens_luefter_reading_2= 0;
+  //float_t strom_sensor_luefter_strom = 0;
 
-  curr_sens_luefter_reading = analogRead(A0);
-  strom_sensor_luefter_strom = ((float_t)(curr_sens_luefter_reading * CURR_SENS_ABSOLUTE_MEASUREMENT_RANGE) / (float_t)CURR_SENS_ADC_BIT_RESOLUTION) + (float_t)CURR_SENS_MEASUREMENT_RANGE_OFFSET;
+  select_adc_channel(2);
+  curr_sens_luefter_reading_1 = analogRead(A0);
+  delay(1);
+  //strom_sensor_luefter_strom = ((float_t)(curr_sens_luefter_reading * CURR_SENS_ABSOLUTE_MEASUREMENT_RANGE) / (float_t)CURR_SENS_ADC_BIT_RESOLUTION) + (float_t)CURR_SENS_MEASUREMENT_RANGE_OFFSET;
+  select_adc_channel(4);
+  curr_sens_luefter_reading_2 = analogRead(A0);
 
   // Ausgabe der Ergebnisse am Seriellen Monitor
-  Serial.print("Luefterstrom = " ); 
-  Serial.print(strom_sensor_luefter_strom, 3); 
-  Serial.print(" [A]    "); 
-  Serial.print(curr_sens_luefter_reading); 
+  Serial.print(curr_sens_luefter_reading_1); 
+  Serial.print("    ");
+  Serial.print(curr_sens_luefter_reading_2); 
   Serial.println();
 
 
@@ -111,7 +139,7 @@ void loop() {
   // printTemperature(temp_sens_2_addr);
   // Serial.println();
   // Serial.println();
-  delay(100);
+  delay(1000);
   
   // Send command to all the sensors for temperature conversion
   // temp_sensors.requestTemperatures(); 
@@ -196,6 +224,8 @@ void loop() {
 
 
 //############## Funktionen ################################
+
+//+++++ Funktionen für die Temperatursensoren +++++++++++++
 void printAddress(DeviceAddress deviceAddress)
 { 
   for (uint8_t i = 0; i < 8; i++)
@@ -213,4 +243,25 @@ void printTemperature(DeviceAddress deviceAddress)
   float tempC = temp_sensors.getTempC(deviceAddress);
   Serial.print(tempC);
   Serial.print("C");
+}
+
+//+++++ Funktionen für den ADC Channel Umschalter +++++++++++++
+void select_adc_channel(uint8_t channel_number)
+{
+  for(uint8_t pin_number=0; pin_number < number_of_channel_select_pins; pin_number++)
+  {
+    // Setze den Schaltzustand im internen Register der Schiftregister
+    shift_register_obj.setNoUpdate(pin_number, adc_channel_pin_mapping[channel_number][pin_number]);
+  }
+  // Übernehme den Schaltzustand der internen Register in die Ausgangspins
+  shift_register_obj.updateRegisters();
+}
+
+void select_adc_channel_no_update(uint8_t channel_number)
+{
+  for(uint8_t pin_number=0; pin_number < number_of_channel_select_pins; pin_number++)
+  {
+    // Setze den Schaltzustand im internen Register der Schiftregister
+    shift_register_obj.setNoUpdate(pin_number, adc_channel_pin_mapping[channel_number][pin_number]);
+  }
 }

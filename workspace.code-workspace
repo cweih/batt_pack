@@ -4,5 +4,10 @@
 			"name": "batt_pack",
 			"path": "batt_pack"
 		}
-	]
+	],
+	"settings": {
+		"projectManager.any.baseFolders": [
+			"C:\\Entwicklung\\Bastelprojekte"
+		]
+	}
 }
