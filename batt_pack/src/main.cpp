@@ -18,10 +18,13 @@
 #define TEMP_SENS_ADDR_1 {0x28, 0xFB, 0x90, 0x9D, 0x31, 0x21, 0x03, 0xCD} // One Wire Bus Adresse von Sensor 1
 #define TEMP_SENS_ADDR_2 {0x28, 0xA7, 0x82, 0x60, 0x31, 0x21, 0x03, 0x8D} // One Wire Bus Adresse von Sensor 2
 
-// ++++ Für die Strommessungen
+// ++++ Für die Strommessungen ++++++++++
 #define CURR_SENS_ABSOLUTE_MEASUREMENT_RANGE (10) // [A] Strommessspanne von -5 bis 5 Ampere macht 10A absolut
 #define CURR_SENS_ADC_BIT_RESOLUTION (1024) // Wertebereich am ADC von 0 bis 1024
 #define CURR_SENS_MEASUREMENT_RANGE_OFFSET (-5) // [A] Messwertbereich geht nicht von 0 bis 10 sondern von -5 bis 5, muss also um -5 verschoben werden
+
+// ++++ Für die CAN Kommunikation ++++++++
+#define SPI_CS_PIN_FOR_CAN_MPC2515 (15) // [] Pin Nummer des chip select pins der SPI Kommunikation zwischen D1 Mini und dem MPC2515 CAN Modul
 
 //############ Globale Variablen ###############
 // Variablen für das Relais Board
@@ -99,14 +102,15 @@ void setup() {
   // Serial.begin(9600);
   // while (!Serial);
 
-  // Serial.println("CAN Sender");
-  // CAN.setSPIFrequency(1e6);
-  // CAN.setClockFrequency(8e6);
-  // // start the CAN bus at 500 kbps
-  // if (!CAN.begin(500E3)) {
-  //   Serial.println("Starting CAN failed!");
-  //   while (1);
-  // }
+  Serial.println("CAN Sender");
+  CAN.setPins(SPI_CS_PIN_FOR_CAN_MPC2515, 2); // Interrupt PIN wird nicht genutzt und kann auf default 2 stehen bleiben
+  CAN.setSPIFrequency(1e6);
+  CAN.setClockFrequency(8e6);
+  // start the CAN bus at 500 kbps
+  if (!CAN.begin(500E3)) {
+    Serial.println("Starting CAN failed!");
+    while (1);
+  }
 }
 
 void loop() {
@@ -116,7 +120,7 @@ void loop() {
 
   select_adc_channel(2);
   curr_sens_luefter_reading_1 = analogRead(A0);
-  delay(1);
+  delay(2000);
   //strom_sensor_luefter_strom = ((float_t)(curr_sens_luefter_reading * CURR_SENS_ABSOLUTE_MEASUREMENT_RANGE) / (float_t)CURR_SENS_ADC_BIT_RESOLUTION) + (float_t)CURR_SENS_MEASUREMENT_RANGE_OFFSET;
   select_adc_channel(4);
   curr_sens_luefter_reading_2 = analogRead(A0);
@@ -139,7 +143,7 @@ void loop() {
   // printTemperature(temp_sens_2_addr);
   // Serial.println();
   // Serial.println();
-  delay(1000);
+  //delay(2000);
   
   // Send command to all the sensors for temperature conversion
   // temp_sensors.requestTemperatures(); 
@@ -194,32 +198,32 @@ void loop() {
   // // send packet: id is 11 bits, packet can contain up to 8 bytes of data
   // Serial.print("Sending packet ... ");
 
-  // CAN.beginPacket(0x12);
-  // CAN.write('h');
-  // CAN.write('e');
-  // CAN.write('l');
-  // CAN.write('l');
-  // CAN.write('o');
-  // CAN.endPacket();
+  CAN.beginPacket(0x12);
+  CAN.write('h');
+  CAN.write('e');
+  CAN.write('l');
+  CAN.write('l');
+  CAN.write('o');
+  CAN.endPacket();
 
-  // Serial.println("done");
+  Serial.println("done");
 
-  // delay(1000);
+  delay(1000);
 
-  // // send extended packet: id is 29 bits, packet can contain up to 8 bytes of data
-  // Serial.print("Sending extended packet ... ");
+  // send extended packet: id is 29 bits, packet can contain up to 8 bytes of data
+  Serial.print("Sending extended packet ... ");
 
-  // CAN.beginExtendedPacket(0xabcdef);
-  // CAN.write('w');
-  // CAN.write('o');
-  // CAN.write('r');
-  // CAN.write('l');
-  // CAN.write('d');
-  // CAN.endPacket();
+  CAN.beginExtendedPacket(0xabcdef);
+  CAN.write('w');
+  CAN.write('o');
+  CAN.write('r');
+  CAN.write('l');
+  CAN.write('d');
+  CAN.endPacket();
 
-  // Serial.println("done");
+  Serial.println("done");
 
-  // delay(1000);
+  delay(1000);
 }
 
 
