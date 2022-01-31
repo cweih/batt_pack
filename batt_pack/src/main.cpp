@@ -26,6 +26,27 @@
 // ++++ Für die CAN Kommunikation ++++++++
 #define SPI_CS_PIN_FOR_CAN_MPC2515 (15) // [] Pin Nummer des chip select pins der SPI Kommunikation zwischen D1 Mini und dem MPC2515 CAN Modul
 
+#define CAN_LIB_RET_VAL_ERROR (0) // Return Wert der CAN Bibliothek der anzeigt der einen Fehler signalisiert
+#define CAN_LIB_RET_VAL_OK (1) // Return Wert der CAN Bibliothek der anzeigt der signalisiert das alles in Ordnung ist
+
+// IDs von Battery Pack 0 gehen von 0...9, von Pack 1 von 10...19 und so weiter
+#define CAN_ID_PAKET_0  (0) // Paket ID (Arbitrierungs ID) für die CAN Kommunikation (anhand dieser Nummer wird das Paket eindeutig identifiziert)
+#define CAN_ID_PAKET_1  (1) // Paket ID (Arbitrierungs ID) für die CAN Kommunikation (anhand dieser Nummer wird das Paket eindeutig identifiziert)
+#define CAN_ID_PAKET_2  (2) // Paket ID (Arbitrierungs ID) für die CAN Kommunikation (anhand dieser Nummer wird das Paket eindeutig identifiziert)
+
+// ++++ Error Codes ++++++++
+#define ERROR_CODE_NO_ERROR                         (255u) // Kein Fehler ist aufgetreten
+#define ERROR_CODE_INIT                             (  1u) // Init Wert für die Fehlerstatus
+#define ERROR_CODE_CANNOT_CONNECT_TO_CAN            (  2u) // Can communication konnte nicht aufgesetzt werden (checke das CAN board (Kondensator kaput?) oder die Verkabelung vom SPI des D1 Mini zum CAN Board (MPC2515))
+#define ERROR_CODE_AT_LEAST_ONE_BEGIN_OR_END_FAILED (  3u) // Bei mindestens einem der CAN Pakete ist es beim Aufrufen der Funktion "begin" oder "end" zu einem Fehler gekommen
+#define ERROR_CODE_AT_LEAST_ONE_CAN_WRITE_FAILED    (  4u) // Bei mindestens einem der CAN Pakete ist es beim Aufrufen der Funktion "write" zu einem Fehler gekommen
+
+// ++++ Fixed Point Umwandlung ++++++
+/// Fixed-point Format: 7.9 (16-bit)
+#define FIXED_POINT_FRACTIONAL_BITS_MAX128 (9) // 7 Bits für die Zahl vor dem Komma (maximal 128) und 9 Bits für die Zahl nach dem Komma (Auflösung von 0,002)
+#define FIXED_POINT_FRACTIONAL_BITS_MAX64 (10) // 6 Bits für die Zahl vor dem Komma (maximal 64) und 10 Bits für die Zahl nach dem Komma (Auflösung von 0,001)
+#define FIXED_POINT_FRACTIONAL_BITS_MAX32 (11) // 5 Bits für die Zahl vor dem Komma (maximal 32) und 11 Bits für die Zahl nach dem Komma (Auflösung von 0,0005)
+
 //############ Globale Variablen ###############
 // Variablen für das Relais Board
 int schalterzustand = 1;
@@ -37,12 +58,12 @@ ShiftRegister74HC595<NUMBER_OF_SHIFT_REGISTERS> shift_register_obj;
 // ++++ Für die Temperatursensoren ++++
 OneWire one_wire(ONE_WIRE_BUS); // Erzeuge ein oneWire Objekt um mit einem oneWire Gerät zu kommunizieren
 DallasTemperature temp_sensors(&one_wire); //Erzeuge ein DallasTemperature Objekt mit Verweis auf das zu nutzende oneWire Objekt
-int device_count = 0;
-float temp_in_grad;
+int16_t i16_device_count = 0;
+float f_temp_in_grad;
 DeviceAddress Thermometer;
-uint8_t temp_sens_0_addr[8] = TEMP_SENS_ADDR_0;
-uint8_t temp_sens_1_addr[8] = TEMP_SENS_ADDR_1;
-uint8_t temp_sens_2_addr[8] = TEMP_SENS_ADDR_2;
+uint8_t u8_temp_sens_0_addr[8] = TEMP_SENS_ADDR_0;
+uint8_t u8_temp_sens_1_addr[8] = TEMP_SENS_ADDR_1;
+uint8_t u8_temp_sens_2_addr[8] = TEMP_SENS_ADDR_2;
 
 // ++++ Variablen für den ADC Kanal Schalter (CD74HC4067) ++++++++
 const uint8_t number_of_channel_select_pins=4;
@@ -65,15 +86,36 @@ uint8_t adc_channel_pin_mapping[16][number_of_channel_select_pins]={
     {1,1,1,1}  //channel 15
   };
 
-
+//############# Strukturen ############
+typedef struct t_batt_pack_data {
+	float_t f_temp_sens_0_val; // [Grad Celsius] Gemessene Temperatur von Temperatursensor 0
+  float_t f_temp_sens_1_val; // [Grad Celsius] Gemessene Temperatur von Temperatursensor 1
+  float_t f_temp_sens_2_val; // [Grad Celsius] Gemessene Temperatur von Temperatursensor 2
+  float_t f_fan_current; // [A] Gemessene Stromstaerke der Luefterversorgungsleitung
+  float_t f_heating_current; // [A] Gemessene Stromstärke der Luefterversorgungsleitung
+  float_t f_voltage_sens_battery_pack; // [V] Gemessene Spannung an den äußeren Klemmen des Battery Packs
+  uint16_t u16_status_bit_field; // Statusbitfeld der Batterie (Bit 0: Luefter geschaltet, Bit 1: Heizung geschaltet, Bit 2: Batterie voll, Bit 3: Batterie leer)
+  uint8_t u8_error_code; // Error codes wie in den defines definiert  
+}t_batt_pack_data;
 
 //############# Funktionsprototypen ############
 void printAddress(DeviceAddress deviceAddress);
 void printTemperature(DeviceAddress deviceAddress);
 void select_adc_channel(uint8_t channel_number);
 void select_adc_channel_no_update(uint8_t channel_number);
+void split_16bit_number_into_8bit(uint16_t u16_input_val, uint8_t au8_output_vals[2]);
+uint8_t can_send_batt_pack_data(t_batt_pack_data *ps_batt_pack_data);
 
+//############# Inline Funktionen ############
+inline float_t fixed_to_float(uint16_t u16_input, uint8_t u8_fixed_point_fractional_bits)
+{
+    return ((float_t)u16_input / (float_t)(1 << u8_fixed_point_fractional_bits));
+}
 
+inline uint16_t float_to_fixed(float_t input, uint8_t u8_fixed_point_fractional_bits)
+{
+    return (uint16_t)(round(input * (1 << u8_fixed_point_fractional_bits)));
+}
 
 //########### MAIN ####################################################
 //#####################################################################
@@ -114,9 +156,14 @@ void setup() {
 }
 
 void loop() {
-  int curr_sens_luefter_reading_1= 0;
-  int curr_sens_luefter_reading_2= 0;
+  t_batt_pack_data s_batt_pack_data;
+  int16_t curr_sens_luefter_reading_1= 0;
+  int16_t curr_sens_luefter_reading_2= 0;
+  uint8_t u8_status = ERROR_CODE_INIT;
   //float_t strom_sensor_luefter_strom = 0;
+
+  // Setzt alle Daten in s_batt_pack_data auf 0
+  memset(&s_batt_pack_data, 0, sizeof(s_batt_pack_data));
 
   select_adc_channel(2);
   curr_sens_luefter_reading_1 = analogRead(A0);
@@ -198,32 +245,9 @@ void loop() {
   // // send packet: id is 11 bits, packet can contain up to 8 bytes of data
   // Serial.print("Sending packet ... ");
 
-  CAN.beginPacket(0x12);
-  CAN.write('h');
-  CAN.write('e');
-  CAN.write('l');
-  CAN.write('l');
-  CAN.write('o');
-  CAN.endPacket();
+  // Sende gesammelte Daten über CAN
+  u8_status = can_send_batt_pack_data(&s_batt_pack_data);
 
-  Serial.println("done");
-
-  delay(1000);
-
-  // send extended packet: id is 29 bits, packet can contain up to 8 bytes of data
-  Serial.print("Sending extended packet ... ");
-
-  CAN.beginExtendedPacket(0xabcdef);
-  CAN.write('w');
-  CAN.write('o');
-  CAN.write('r');
-  CAN.write('l');
-  CAN.write('d');
-  CAN.endPacket();
-
-  Serial.println("done");
-
-  delay(1000);
 }
 
 
@@ -268,4 +292,60 @@ void select_adc_channel_no_update(uint8_t channel_number)
     // Setze den Schaltzustand im internen Register der Schiftregister
     shift_register_obj.setNoUpdate(pin_number, adc_channel_pin_mapping[channel_number][pin_number]);
   }
+}
+
+void split_16bit_number_into_8bit(uint16_t u16_input_val, uint8_t au8_output_vals[2])
+{
+  au8_output_vals[0] = (u16_input_val >> 0) & 0xFF;  // shift um 0 Bit tut nichts, aber aus didaktischen Gruenden hier geschrieben
+  au8_output_vals[1] = (u16_input_val >> 8) & 0xFF; 
+}
+
+uint8_t can_send_batt_pack_data(t_batt_pack_data *ps_batt_pack_data)
+{
+  uint8_t u8_status = ERROR_CODE_INIT;
+  int i_can_begin_end_ret_val = 0;
+  size_t can_write_ret_val = 0u;
+  uint16_t u16_from_float;
+  uint8_t au8_split_from_u16[2];
+
+  // Paket 0 initialisieren, Werte berechnen, in das Paket schreiben und das Paket abschliessen
+  i_can_begin_end_ret_val = CAN.beginPacket(CAN_ID_PAKET_0);
+  if(i_can_begin_end_ret_val == CAN_LIB_RET_VAL_OK)
+  {
+    // Temperatursensor 0
+    u16_from_float = float_to_fixed(ps_batt_pack_data->f_temp_sens_0_val, FIXED_POINT_FRACTIONAL_BITS_MAX128);
+    split_16bit_number_into_8bit(u16_from_float, au8_split_from_u16);
+    can_write_ret_val |= CAN.write(au8_split_from_u16[0]);
+    can_write_ret_val |= CAN.write(au8_split_from_u16[1]);
+    // Temperatursensor 1
+    u16_from_float = float_to_fixed(ps_batt_pack_data->f_temp_sens_1_val, FIXED_POINT_FRACTIONAL_BITS_MAX128);
+    split_16bit_number_into_8bit(u16_from_float, au8_split_from_u16);
+    can_write_ret_val |= CAN.write(au8_split_from_u16[0]);
+    can_write_ret_val |= CAN.write(au8_split_from_u16[1]);
+    // Temperatursensor 2
+    u16_from_float = float_to_fixed(ps_batt_pack_data->f_temp_sens_2_val, FIXED_POINT_FRACTIONAL_BITS_MAX128);
+    split_16bit_number_into_8bit(u16_from_float, au8_split_from_u16);
+    can_write_ret_val |= CAN.write(au8_split_from_u16[0]);
+    can_write_ret_val |= CAN.write(au8_split_from_u16[1]);
+    // Lüfterstrom
+    u16_from_float = float_to_fixed(ps_batt_pack_data->f_fan_current, FIXED_POINT_FRACTIONAL_BITS_MAX32);
+    split_16bit_number_into_8bit(u16_from_float, au8_split_from_u16);
+    can_write_ret_val |= CAN.write(au8_split_from_u16[0]);
+    can_write_ret_val |= CAN.write(au8_split_from_u16[1]);
+    // Paket abschliessen
+    i_can_begin_end_ret_val |= CAN.endPacket();
+    Serial.println("Paket 0 gesendet");
+  }
+
+  // TODO: Ändern auf Error Bitfeld um Fehler nicht zu maskieren
+  if(i_can_begin_end_ret_val == CAN_LIB_RET_VAL_ERROR)
+  {
+    u8_status = ERROR_CODE_AT_LEAST_ONE_BEGIN_OR_END_FAILED;
+  }
+  if(can_write_ret_val == CAN_LIB_RET_VAL_ERROR)
+  {
+    u8_status = ERROR_CODE_AT_LEAST_ONE_CAN_WRITE_FAILED;
+  }
+
+  return u8_status;
 }
