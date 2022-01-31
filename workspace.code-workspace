@@ -8,6 +8,9 @@
 	"settings": {
 		"projectManager.any.baseFolders": [
 			"C:\\Entwicklung\\Bastelprojekte"
-		]
+		],
+		"files.associations": {
+			"cmath": "cpp"
+		}
 	}
 }
