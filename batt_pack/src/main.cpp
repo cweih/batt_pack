@@ -122,7 +122,6 @@ void printAddress(DeviceAddress deviceAddress);
 void printTemperature(DeviceAddress deviceAddress);
 void select_adc_channel(uint8_t channel_number);
 void select_adc_channel_no_update(uint8_t channel_number);
-void split_16bit_number_into_8bit(uint16_t u16_input_val, uint8_t au8_output_vals[2]);
 uint16_t can_send_batt_pack_data(t_batt_pack_data *ps_batt_pack_data);
 uint16_t read_temperatures_from_all_connected_sensors(t_batt_pack_data *ps_batt_pack_data);
 void read_all_ADC_measurement_values(t_batt_pack_data *ps_batt_pack_data);
@@ -161,7 +160,7 @@ inline int16_t float_to_fixed(float_t input, uint8_t u8_fixed_point_fractional_b
     return i_b;
 }
 
-inline int16_t fixed_to_float(int16_t i16_input, uint8_t u8_fixed_point_fractional_bits)
+inline float_t fixed_to_float(int16_t i16_input, uint8_t u8_fixed_point_fractional_bits)
 {
     int16_t i16_c = abs(i16_input);
     int16_t i_sign = 1;
@@ -193,10 +192,10 @@ inline bool check_bit_16bit(uint16_t u16_bitfield, uint8_t u8_bit_number)
   return (bool)((u16_bitfield >> u8_bit_number) & 1u);
 }
 
-inline void split_16bit_number_into_8bit(uint16_t u16_input_val, uint8_t au8_output_vals[2])
+inline void split_16bit_number_into_8bit_int16(int16_t i16_input_val, uint8_t au8_output_vals[2])
 {
-  au8_output_vals[0] = (u16_input_val >> 0) & 0xFF;  // shift um 0 Bit tut nichts, aber aus didaktischen Gruenden hier geschrieben
-  au8_output_vals[1] = (u16_input_val >> 8) & 0xFF; 
+  au8_output_vals[0] = (i16_input_val >> 0) & 0xFF;  // shift um 0 Bit tut nichts, aber aus didaktischen Gruenden hier geschrieben
+  au8_output_vals[1] = (i16_input_val >> 8) & 0xFF; 
 }
 
 //########### MAIN ####################################################
@@ -465,7 +464,7 @@ uint16_t can_send_batt_pack_data(t_batt_pack_data *ps_batt_pack_data)
   uint16_t u16_status = ERROR_BITFIELD_INIT;
   int i_can_begin_end_ret_val = CAN_LIB_RET_VAL_OK;
   size_t can_write_ret_val = 0u;
-  uint16_t u16_from_float;
+  int16_t i16_from_float;
   uint8_t au8_split_from_u16[2];
 
   // Paket 0 initialisieren, Werte berechnen, in das Paket schreiben und das Paket abschliessen
@@ -473,8 +472,8 @@ uint16_t can_send_batt_pack_data(t_batt_pack_data *ps_batt_pack_data)
   if(i_can_begin_end_ret_val == CAN_LIB_RET_VAL_OK)
   {
     // Temperatursensor 0
-    u16_from_float = float_to_fixed(ps_batt_pack_data->f_temp_sens_0_val, FIXED_POINT_FRACTIONAL_BITS_MAX128);
-    split_16bit_number_into_8bit(u16_from_float, au8_split_from_u16);
+    i16_from_float = float_to_fixed(ps_batt_pack_data->f_temp_sens_0_val, FIXED_POINT_FRACTIONAL_BITS_MAX128);
+    split_16bit_number_into_8bit_int16(i16_from_float, au8_split_from_u16);
     can_write_ret_val &= CAN.write(au8_split_from_u16[0]);
     can_write_ret_val &= CAN.write(au8_split_from_u16[1]);
     #if(DEBUG_PRINT_ON)
@@ -484,8 +483,8 @@ uint16_t can_send_batt_pack_data(t_batt_pack_data *ps_batt_pack_data)
     Serial.print(" ");
     #endif
     // Temperatursensor 1
-    u16_from_float = float_to_fixed(ps_batt_pack_data->f_temp_sens_1_val, FIXED_POINT_FRACTIONAL_BITS_MAX128);
-    split_16bit_number_into_8bit(u16_from_float, au8_split_from_u16);
+    i16_from_float = float_to_fixed(ps_batt_pack_data->f_temp_sens_1_val, FIXED_POINT_FRACTIONAL_BITS_MAX128);
+    split_16bit_number_into_8bit_int16(i16_from_float, au8_split_from_u16);
     can_write_ret_val &= CAN.write(au8_split_from_u16[0]);
     can_write_ret_val &= CAN.write(au8_split_from_u16[1]);
     #if(DEBUG_PRINT_ON)
@@ -495,8 +494,8 @@ uint16_t can_send_batt_pack_data(t_batt_pack_data *ps_batt_pack_data)
     Serial.print(" ");
     #endif
     // Temperatursensor 2
-    u16_from_float = float_to_fixed(ps_batt_pack_data->f_temp_sens_2_val, FIXED_POINT_FRACTIONAL_BITS_MAX128);
-    split_16bit_number_into_8bit(u16_from_float, au8_split_from_u16);
+    i16_from_float = float_to_fixed(ps_batt_pack_data->f_temp_sens_2_val, FIXED_POINT_FRACTIONAL_BITS_MAX128);
+    split_16bit_number_into_8bit_int16(i16_from_float, au8_split_from_u16);
     can_write_ret_val &= CAN.write(au8_split_from_u16[0]);
     can_write_ret_val &= CAN.write(au8_split_from_u16[1]);
     #if(DEBUG_PRINT_ON)
@@ -506,8 +505,8 @@ uint16_t can_send_batt_pack_data(t_batt_pack_data *ps_batt_pack_data)
     Serial.print(" ");
     #endif
     // Luefterstrom
-    u16_from_float = float_to_fixed(ps_batt_pack_data->f_fan_current, FIXED_POINT_FRACTIONAL_BITS_MAX32);
-    split_16bit_number_into_8bit(u16_from_float, au8_split_from_u16);
+    i16_from_float = float_to_fixed(ps_batt_pack_data->f_fan_current, FIXED_POINT_FRACTIONAL_BITS_MAX32);
+    split_16bit_number_into_8bit_int16(i16_from_float, au8_split_from_u16);
     can_write_ret_val &= CAN.write(au8_split_from_u16[0]);
     can_write_ret_val &= CAN.write(au8_split_from_u16[1]);
     #if(DEBUG_PRINT_ON)
@@ -529,8 +528,8 @@ uint16_t can_send_batt_pack_data(t_batt_pack_data *ps_batt_pack_data)
   if(i_can_begin_end_ret_val == CAN_LIB_RET_VAL_OK)
   {
     // Heizungsstrom
-    u16_from_float = float_to_fixed(ps_batt_pack_data->f_heating_current, FIXED_POINT_FRACTIONAL_BITS_MAX32);
-    split_16bit_number_into_8bit(u16_from_float, au8_split_from_u16);
+    i16_from_float = float_to_fixed(ps_batt_pack_data->f_heating_current, FIXED_POINT_FRACTIONAL_BITS_MAX32);
+    split_16bit_number_into_8bit_int16(i16_from_float, au8_split_from_u16);
     can_write_ret_val &= CAN.write(au8_split_from_u16[0]);
     can_write_ret_val &= CAN.write(au8_split_from_u16[1]);
     #if(DEBUG_PRINT_ON)
@@ -540,8 +539,8 @@ uint16_t can_send_batt_pack_data(t_batt_pack_data *ps_batt_pack_data)
     Serial.print(" ");
     #endif
     // Spannung des Battery Packs
-    u16_from_float = float_to_fixed(ps_batt_pack_data->f_voltage_sens_battery_pack, FIXED_POINT_FRACTIONAL_BITS_MAX64);
-    split_16bit_number_into_8bit(u16_from_float, au8_split_from_u16);
+    i16_from_float = float_to_fixed(ps_batt_pack_data->f_voltage_sens_battery_pack, FIXED_POINT_FRACTIONAL_BITS_MAX64);
+    split_16bit_number_into_8bit_int16(i16_from_float, au8_split_from_u16);
     can_write_ret_val &= CAN.write(au8_split_from_u16[0]);
     can_write_ret_val &= CAN.write(au8_split_from_u16[1]);
     #if(DEBUG_PRINT_ON)
@@ -551,7 +550,7 @@ uint16_t can_send_batt_pack_data(t_batt_pack_data *ps_batt_pack_data)
     Serial.print(" ");
     #endif
     // Status Bitfeld
-    split_16bit_number_into_8bit(ps_batt_pack_data->u16_status_bitfield, au8_split_from_u16);
+    split_16bit_number_into_8bit_uint16(ps_batt_pack_data->u16_status_bitfield, au8_split_from_u16);
     can_write_ret_val &= CAN.write(au8_split_from_u16[0]);
     can_write_ret_val &= CAN.write(au8_split_from_u16[1]);
     #if(DEBUG_PRINT_ON)
@@ -573,7 +572,7 @@ uint16_t can_send_batt_pack_data(t_batt_pack_data *ps_batt_pack_data)
       set_bit_16bit(ps_batt_pack_data->u16_error_bitfield, ERROR_BIT_AT_LEAST_ONE_CAN_WRITE_FAILED);
     }
     // Fehler Bitfeld
-    split_16bit_number_into_8bit(ps_batt_pack_data->u16_error_bitfield, au8_split_from_u16);
+    split_16bit_number_into_8bit_uint16(ps_batt_pack_data->u16_error_bitfield, au8_split_from_u16);
     can_write_ret_val &= CAN.write(au8_split_from_u16[0]);
     can_write_ret_val &= CAN.write(au8_split_from_u16[1]);
     #if(DEBUG_PRINT_ON)
