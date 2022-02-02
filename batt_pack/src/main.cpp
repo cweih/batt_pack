@@ -132,14 +132,49 @@ float_t get_mean_of_n_ADC_samples(uint16_t u16_nof_samples);
 void print_temperatures_from_all_connected_sensors(t_batt_pack_data *ps_batt_pack_data);
 #endif
 //############# Inline Funktionen ############
-inline float_t fixed_to_float(uint16_t u16_input, uint8_t u8_fixed_point_fractional_bits)
+// inline float_t fixed_to_float(uint16_t u16_input, uint8_t u8_fixed_point_fractional_bits)
+// {
+//     return ((float_t)u16_input / (float_t)(1 << u8_fixed_point_fractional_bits));
+// }
+
+// inline uint16_t float_to_fixed_uint16(float_t input, uint8_t u8_fixed_point_fractional_bits)
+// {
+//     return (uint16_t)(round(input * (1 << u8_fixed_point_fractional_bits)));
+// }
+
+// inline int16_t float_to_fixed_int16(float_t input, uint8_t u8_fixed_point_fractional_bits)
+// {
+//     return (int16_t)(round(input * (1 << u8_fixed_point_fractional_bits)));
+// }
+
+inline int16_t float_to_fixed(float_t input, uint8_t u8_fixed_point_fractional_bits)
 {
-    return ((float_t)u16_input / (float_t)(1 << u8_fixed_point_fractional_bits));
+    float_t f_a = input * pow(2.0f, (int8_t)u8_fixed_point_fractional_bits);
+    int16_t i_b = (int16_t)(round(f_a));
+    if (f_a < 0.0f)
+    {
+        // Naechsten drei Zeilen wandeln b ins zweier Komplement
+        i_b = abs(i_b);
+        i_b = ~i_b;
+        i_b = i_b + 1;
+    }
+    return i_b;
 }
 
-inline uint16_t float_to_fixed(float_t input, uint8_t u8_fixed_point_fractional_bits)
+inline int16_t fixed_to_float(int16_t i16_input, uint8_t u8_fixed_point_fractional_bits)
 {
-    return (uint16_t)(round(input * (1 << u8_fixed_point_fractional_bits)));
+    int16_t i16_c = abs(i16_input);
+    int16_t i_sign = 1;
+    if (i16_input < 0)
+    {
+        // Naechsten drei Zeilen wandeln vom zweier Komplement zurueck
+        i16_c = i16_input - 1;
+        i16_c = ~i16_c;
+        i_sign = -1;
+    }
+    float_t f_output = (1.0f * (float_t)i16_c) / pow(2.0f, (int16_t)u8_fixed_point_fractional_bits);
+    f_output *= (float_t)i_sign;
+    return f_output;
 }
 
 inline void set_bit_16bit(uint16_t u16_bitfield, uint8_t u8_bit_number)
