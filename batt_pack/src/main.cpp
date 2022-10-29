@@ -550,7 +550,7 @@ uint16_t can_send_batt_pack_data(t_batt_pack_data *ps_batt_pack_data)
     Serial.print(" ");
     #endif
     // Status Bitfeld
-    split_16bit_number_into_8bit_uint16(ps_batt_pack_data->u16_status_bitfield, au8_split_from_u16);
+    split_16bit_number_into_8bit_int16(int16_t(ps_batt_pack_data->u16_status_bitfield), au8_split_from_u16);
     can_write_ret_val &= CAN.write(au8_split_from_u16[0]);
     can_write_ret_val &= CAN.write(au8_split_from_u16[1]);
     #if(DEBUG_PRINT_ON)
@@ -572,7 +572,7 @@ uint16_t can_send_batt_pack_data(t_batt_pack_data *ps_batt_pack_data)
       set_bit_16bit(ps_batt_pack_data->u16_error_bitfield, ERROR_BIT_AT_LEAST_ONE_CAN_WRITE_FAILED);
     }
     // Fehler Bitfeld
-    split_16bit_number_into_8bit_uint16(ps_batt_pack_data->u16_error_bitfield, au8_split_from_u16);
+    split_16bit_number_into_8bit_int16(int16_t(ps_batt_pack_data->u16_error_bitfield), au8_split_from_u16);
     can_write_ret_val &= CAN.write(au8_split_from_u16[0]);
     can_write_ret_val &= CAN.write(au8_split_from_u16[1]);
     #if(DEBUG_PRINT_ON)
