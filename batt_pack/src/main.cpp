@@ -22,7 +22,7 @@
 #define CURR_SENS_ABSOLUTE_MEASUREMENT_RANGE (10.0f)  // [A] Strommessspanne von -5 bis 5 Ampere macht 10A absolut
 #define CURR_SENS_ADC_BIT_RESOLUTION (1024)           // Wertebereich am ADC von 0 bis 1024
 #define CURR_SENS_MEASUREMENT_RANGE_OFFSET (-5.0f)    // [A] Messwertbereich geht nicht von 0 bis 10 sondern von -5 bis 5, muss also um -5 verschoben werden
-#define CURR_SENS_ADC_ZERO_POINT_CORRECTION (-13.0f)  // [] Korrektur des Nullpunkts, sodass bei 0A tatsaechlich auch 0A gemessen werden
+#define CURR_SENS_ADC_ZERO_POINT_CORRECTION (-14.0f)  // [] Korrektur des Nullpunkts, sodass bei 0A tatsaechlich auch 0A gemessen werden
 
 #define VOLTAGE_SENS_BATTERY_PACK_RANGE (65.0f)       // [V] Messspanne fuer die Messung der Battery Pack Spannung
 #define VOLTAGE_SENS_MEASUREMENT_RANGE_OFFSET (0.0f)  // [V] Messoffset (Nullpunktverschiebung) fuer die Messung der Battery Pack Spannung - kein Offset vorhanden
@@ -32,8 +32,9 @@
 
 // ++++ Für die CAN Kommunikation ++++++++
 #define SPI_CS_PIN_FOR_CAN_MPC2515 (15) // [] Pin Nummer des chip select pins der SPI Kommunikation zwischen D1 Mini und dem MPC2515 CAN Modul
+#define RECEIVE_POLLING_NOF_SKIPPED_WAIT_MILLISECONDS (3u) // [>0] Am Ende eines Loopdurchlaufs wird gewartet bevor die nächste Loop startet. In der Zeit wird der CAN gepollt. Hier kann man einstellen wie häufig gepollt werden soll.
 
-#define CAN_LIB_RET_VAL_ERROR (0) // Return Wert der CAN Bibliothek der anzeigt der einen Fehler signalisiert
+#define CAN_LIB_RET_VAL_ERROR ((size_t)0) // Return Wert der CAN Bibliothek der anzeigt der einen Fehler signalisiert
 #define CAN_LIB_RET_VAL_OK (1) // Return Wert der CAN Bibliothek der anzeigt der signalisiert das alles in Ordnung ist
 
 // IDs von Battery Pack 0 gehen von 0...9, von Pack 1 von 10...19 und so weiter
@@ -55,6 +56,10 @@
 #define FIXED_POINT_FRACTIONAL_BITS_MAX128 (9) // 7 Bits für die Zahl vor dem Komma (maximal 128) und 9 Bits für die Zahl nach dem Komma (Auflösung von 0,002)
 #define FIXED_POINT_FRACTIONAL_BITS_MAX64 (10) // 6 Bits für die Zahl vor dem Komma (maximal 64) und 10 Bits für die Zahl nach dem Komma (Auflösung von 0,001)
 #define FIXED_POINT_FRACTIONAL_BITS_MAX32 (11) // 5 Bits für die Zahl vor dem Komma (maximal 32) und 11 Bits für die Zahl nach dem Komma (Auflösung von 0,0005)
+
+// ++++ Steuerparamter Script ++++
+#define NOF_MILLISECONDS_WAIT_TIME_FOR_NEXT_CYCLE (5000) // [ms] Wartezeit am Ende der Mainloop bevor der nächste Loopdurchlauf gestartet wird in Millisekunden
+
 
 // ++++ Hilfsdefines ++++
 #define SMALL_FLOAT_VAL (0.0001f) // Kleiner float Wert der bei float Gleichheitsprüfungen als Toleranzwert dient
@@ -176,14 +181,14 @@ inline float_t fixed_to_float(int16_t i16_input, uint8_t u8_fixed_point_fraction
     return f_output;
 }
 
-inline void set_bit_16bit(uint16_t u16_bitfield, uint8_t u8_bit_number)
+inline void set_bit_16bit(uint16_t *pu16_bitfield, uint8_t u8_bit_number)
 {
-  u16_bitfield |= 1u << u8_bit_number;
+  (*pu16_bitfield) |= 1u << u8_bit_number;
 }
 
-inline void clear_bit_16bit(uint16_t u16_bitfield, uint8_t u8_bit_number)
+inline void clear_bit_16bit(uint16_t *pu16_bitfield, uint8_t u8_bit_number)
 {
-  u16_bitfield &= ~(1u << u8_bit_number);
+  (*pu16_bitfield) &= ~(1u << u8_bit_number);
 }
 
 // Gibt "True" zurueck wenn das Bit an der Stelle "u8_bit_number" gesetzt ist
@@ -238,8 +243,8 @@ void setup() {
 
 void loop() {
   t_batt_pack_data s_batt_pack_data;
-  uint16_t u16_status = ERROR_BITFIELD_INIT;
   uint32_t u32_microseconds_start = micros();
+  uint16_t u16_errors = ERROR_BITFIELD_INIT;
 
   // Setzt alle Daten in s_batt_pack_data auf 0
   memset(&s_batt_pack_data, 0, sizeof(s_batt_pack_data));
@@ -247,7 +252,10 @@ void loop() {
   // ############# Auslesen der analogen Messwerte #############################
   read_all_ADC_measurement_values(&s_batt_pack_data);
   // ############# Einlesen der Temperatursensoren #############################
-  u16_status |= read_temperatures_from_all_connected_sensors(&s_batt_pack_data);
+  u16_errors = read_temperatures_from_all_connected_sensors(&s_batt_pack_data);
+
+  /* Neue Fehlerbits in lokale Batteriestruktur schreiben*/
+  s_batt_pack_data.u16_error_bitfield |= u16_errors;
   
   #if(DEBUG_PRINT_ON)
   print_temperatures_from_all_connected_sensors(&s_batt_pack_data);
@@ -260,10 +268,9 @@ void loop() {
   /* Hier auch plausibilitaetschecks durchfuehren wie z.B. Luefter aus aber trotzdem fliesst Strom - same with Heizung - */
 
   // ############# Sende gesammelte Daten über CAN #############################
-  u16_status = can_send_batt_pack_data(&s_batt_pack_data);
-  // Uebertrage moegliche Fehlerbits aus der Funktion in das "globale" Fehlerbitfeld
-  s_batt_pack_data.u16_error_bitfield |= u16_status;
-
+  //u16_errors = can_send_batt_pack_data(&s_batt_pack_data);
+  /* Neue Fehlerbits in lokale Batteriestruktur schreiben*/
+  s_batt_pack_data.u16_error_bitfield |= u16_errors;
 
   // ############# Fehlerbehandlung wenn CAN Kommunikation fehlschlaegt #############################
   /* Statusabfrage CAN SEND: Wenn keine Übertragung möglich TODO: Konzept überlegen
@@ -301,7 +308,44 @@ void loop() {
   Serial.println("");
   #endif
 
-  delay(5000);
+  // ############# POLLING - Empfange Daten über CAN #############################
+  #if(DEBUG_PRINT_ON)
+  Serial.println("");
+  Serial.print("Started Polling CAN BUS!");
+  #endif
+  for(int i=0; i < NOF_MILLISECONDS_WAIT_TIME_FOR_NEXT_CYCLE;i++)
+  {
+    if((i % RECEIVE_POLLING_NOF_SKIPPED_WAIT_MILLISECONDS) == 0)
+    {
+      uint8_t au8_test[8];
+      // Start Polling MPC2515 if it received CAN Messages
+      uint8_t u8_nof_received_bytes = CAN.pollCANData(au8_test, 8u);
+      // Wenn jetzt noch Bytes vorhanden sind, war der Empfangspuffer in diesem Skript zu klein --> Fehler !!!
+      if(CAN.available())
+      {
+        // Fehlermeldung: Möglicher Datenverlust auf dem CAN wegen zu kleinem Empfangsspeicher
+
+      }
+      // Wenn eine Botschaft empfangen wurde starte das Handling der Botschaft
+      if(u8_nof_received_bytes > 0u)
+      {
+        #if(DEBUG_PRINT_ON)
+        Serial.println("");
+        Serial.print("Number of received bytes: ");
+        Serial.print(u8_nof_received_bytes);
+        Serial.println("");
+        for(uint8_t i = 0; i < u8_nof_received_bytes; i++)
+        {
+          Serial.print(au8_test[i], HEX);
+          Serial.print(" ");
+        }
+        #endif
+
+        
+      }
+    }
+    delay(1);
+  }
 }
 
 
@@ -336,18 +380,34 @@ uint16_t read_temperatures_from_all_connected_sensors(t_batt_pack_data *ps_batt_
   ps_batt_pack_data->f_temp_sens_0_val = temp_sensors.getTempC(au8_temp_sens_0_addr);
   ps_batt_pack_data->f_temp_sens_1_val = temp_sensors.getTempC(au8_temp_sens_1_addr);
   ps_batt_pack_data->f_temp_sens_2_val = temp_sensors.getTempC(au8_temp_sens_2_addr);
+
   // Ueberpruefen auf Fehler und setzen der entsprechenden Fehlerbits
   if(fabs(ps_batt_pack_data->f_temp_sens_0_val - (float_t)DEVICE_DISCONNECTED_C) < SMALL_FLOAT_VAL)
   {
-      set_bit_16bit(u16_status, ERROR_BIT_TEMP_SENS_0_DISCONNECTED);
+      set_bit_16bit(&u16_status, ERROR_BIT_TEMP_SENS_0_DISCONNECTED);
+      #if(DEBUG_PRINT_ON)
+      Serial.println("");
+      Serial.print("Temperature sensor 0 is disconnected or broken. Value:");
+      Serial.print(u16_status);
+      #endif
   }
   else if (fabs(ps_batt_pack_data->f_temp_sens_1_val - (float_t)DEVICE_DISCONNECTED_C) < SMALL_FLOAT_VAL)
   {
-    set_bit_16bit(u16_status, ERROR_BIT_TEMP_SENS_1_DISCONNECTED);
+    set_bit_16bit(&u16_status, ERROR_BIT_TEMP_SENS_1_DISCONNECTED);
+    #if(DEBUG_PRINT_ON)
+    Serial.println("");
+    Serial.print("Temperature sensor 1 is disconnected or broken. Value");
+    Serial.print(u16_status);
+    #endif
   }
   else if (fabs(ps_batt_pack_data->f_temp_sens_2_val - (float_t)DEVICE_DISCONNECTED_C) < SMALL_FLOAT_VAL)
   {
-    set_bit_16bit(u16_status, ERROR_BIT_TEMP_SENS_2_DISCONNECTED);
+    set_bit_16bit(&u16_status, ERROR_BIT_TEMP_SENS_2_DISCONNECTED);
+    #if(DEBUG_PRINT_ON)
+    Serial.println("");
+    Serial.print("Temperature sensor 2 is disconnected or broken. Value");
+    Serial.print(u16_status);
+    #endif
   }
   else
   {
@@ -359,6 +419,7 @@ uint16_t read_temperatures_from_all_connected_sensors(t_batt_pack_data *ps_batt_
 #if(DEBUG_PRINT_ON)
 void print_temperatures_from_all_connected_sensors(t_batt_pack_data *ps_batt_pack_data)
 {
+  Serial.println("");
   Serial.print("Temp Sensor 0: ");
   Serial.print(ps_batt_pack_data->f_temp_sens_0_val);
   Serial.print("C");
@@ -463,7 +524,7 @@ uint16_t can_send_batt_pack_data(t_batt_pack_data *ps_batt_pack_data)
 {
   uint16_t u16_status = ERROR_BITFIELD_INIT;
   int i_can_begin_end_ret_val = CAN_LIB_RET_VAL_OK;
-  size_t can_write_ret_val = 0u;
+  size_t can_write_ret_val = 0xFF;
   int16_t i16_from_float;
   uint8_t au8_split_from_u16[2];
 
@@ -522,7 +583,6 @@ uint16_t can_send_batt_pack_data(t_batt_pack_data *ps_batt_pack_data)
     Serial.println("Paket 0 gesendet");
     #endif
   }
-
   // Paket 1 initialisieren, Werte berechnen, in das Paket schreiben und das Paket abschliessen
   i_can_begin_end_ret_val &= CAN.beginPacket(CAN_ID_PAKET_1);
   if(i_can_begin_end_ret_val == CAN_LIB_RET_VAL_OK)
@@ -565,11 +625,15 @@ uint16_t can_send_batt_pack_data(t_batt_pack_data *ps_batt_pack_data)
     // Setzen der Fehlerbits der erkannten Fehler
     if(i_can_begin_end_ret_val == CAN_LIB_RET_VAL_ERROR)
     {
-      set_bit_16bit(ps_batt_pack_data->u16_error_bitfield, ERROR_BIT_AT_LEAST_ONE_CAN_BEGIN_OR_END_FAILED);
+      set_bit_16bit(&(ps_batt_pack_data->u16_error_bitfield), ERROR_BIT_AT_LEAST_ONE_CAN_BEGIN_OR_END_FAILED);
+      #if(DEBUG_PRINT_ON)
+      Serial.println("");
+      Serial.println("Paket 1 gesendet");
+      #endif
     }
     if(can_write_ret_val == CAN_LIB_RET_VAL_ERROR)
     {
-      set_bit_16bit(ps_batt_pack_data->u16_error_bitfield, ERROR_BIT_AT_LEAST_ONE_CAN_WRITE_FAILED);
+      set_bit_16bit(&(ps_batt_pack_data->u16_error_bitfield), ERROR_BIT_AT_LEAST_ONE_CAN_WRITE_FAILED);
     }
     // Fehler Bitfeld
     split_16bit_number_into_8bit_int16(int16_t(ps_batt_pack_data->u16_error_bitfield), au8_split_from_u16);
@@ -592,11 +656,11 @@ uint16_t can_send_batt_pack_data(t_batt_pack_data *ps_batt_pack_data)
   // Setzen der Fehlerbits der erkannten Fehler
   if(i_can_begin_end_ret_val == CAN_LIB_RET_VAL_ERROR)
   {
-    set_bit_16bit(u16_status, ERROR_BIT_AT_LEAST_ONE_CAN_BEGIN_OR_END_FAILED);
+    set_bit_16bit(&u16_status, ERROR_BIT_AT_LEAST_ONE_CAN_BEGIN_OR_END_FAILED);
   }
   if(can_write_ret_val == CAN_LIB_RET_VAL_ERROR)
   {
-    set_bit_16bit(u16_status, ERROR_BIT_AT_LEAST_ONE_CAN_WRITE_FAILED);
+    set_bit_16bit(&u16_status, ERROR_BIT_AT_LEAST_ONE_CAN_WRITE_FAILED);
   }
 
   #if(DEBUG_PRINT_ON)
