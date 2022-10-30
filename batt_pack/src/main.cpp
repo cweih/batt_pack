@@ -33,6 +33,9 @@
 // ++++ Für die CAN Kommunikation ++++++++
 #define SPI_CS_PIN_FOR_CAN_MPC2515 (15) // [] Pin Nummer des chip select pins der SPI Kommunikation zwischen D1 Mini und dem MPC2515 CAN Modul
 #define RECEIVE_POLLING_NOF_SKIPPED_WAIT_MILLISECONDS (3u) // [>0] Am Ende eines Loopdurchlaufs wird gewartet bevor die nächste Loop startet. In der Zeit wird der CAN gepollt. Hier kann man einstellen wie häufig gepollt werden soll.
+#define DEVICE_ID_IN_CAN_NETWORK (1u) // [0-255] Jedes Gerät am CAN Bus hat eine eigene einmalige ID. Battery Pack 0 hat die ID 1.
+#define CAN_RECEIVE_FILTER_MASK  (0x7f8) // [] Filtermaske - laesst nur Botschaften für DEVICE_ID_IN_CAN_NETWORK durch in unserem Smarthome CAN Bus.
+#define INPUT_BUFFER_SIZE_IN_BYTES  (32u) // [] Anzahl der Bytes des Inputbuffers. Eine CAN Botschaft enthält bis zu 8 Bytes Daten, sodass bei 32 bytes 4 volle Botschaften in den Zwischenspeicher passen.
 
 #define CAN_LIB_RET_VAL_ERROR ((size_t)0) // Return Wert der CAN Bibliothek der anzeigt der einen Fehler signalisiert
 #define CAN_LIB_RET_VAL_OK (1) // Return Wert der CAN Bibliothek der anzeigt der signalisiert das alles in Ordnung ist
@@ -50,6 +53,7 @@
 #define ERROR_BIT_TEMP_SENS_0_DISCONNECTED             (  3u) // Temperatursensor 0 nicht mehr erreichbar
 #define ERROR_BIT_TEMP_SENS_1_DISCONNECTED             (  4u) // Temperatursensor 1 nicht mehr erreichbar
 #define ERROR_BIT_TEMP_SENS_2_DISCONNECTED             (  5u) // Temperatursensor 2 nicht mehr erreichbar
+#define ERROR_BIT_POSSIBLE_DATA_LOSS_CAN               (  6u) // Auf dem CAN wurden mehr Bytes empfangen als vom Empfangsbuffer aufgenommen werden konnten
 
 // ++++ Fixed Point Umwandlung ++++++
 /// Fixed-point Format: 7.9 (16-bit)
@@ -68,6 +72,12 @@
 uint32_t u32_micros_script_duration = 0ul;
 // Variablen für das Relais Board
 int schalterzustand = 1;
+
+// +++++ Variablen für CAN ++++++++++++++++++++++
+uint8_t au8_rx_buffer[INPUT_BUFFER_SIZE_IN_BYTES];
+
+// ++++ Variablen Programmflusskontrolle ++++++++
+uint16_t u16_error_bitfield_after_can_send = 0u;
 
 // ++++ Variablen für das Shift Register ++++
 uint8_t ouput_register_1 = 0u;
@@ -131,26 +141,13 @@ uint16_t can_send_batt_pack_data(t_batt_pack_data *ps_batt_pack_data);
 uint16_t read_temperatures_from_all_connected_sensors(t_batt_pack_data *ps_batt_pack_data);
 void read_all_ADC_measurement_values(t_batt_pack_data *ps_batt_pack_data);
 float_t get_mean_of_n_ADC_samples(uint16_t u16_nof_samples);
+uint16_t create_can_id_from_device_id(uint8_t u8_device_id);
 
 #if(DEBUG_PRINT_ON)
 void print_temperatures_from_all_connected_sensors(t_batt_pack_data *ps_batt_pack_data);
 #endif
+
 //############# Inline Funktionen ############
-// inline float_t fixed_to_float(uint16_t u16_input, uint8_t u8_fixed_point_fractional_bits)
-// {
-//     return ((float_t)u16_input / (float_t)(1 << u8_fixed_point_fractional_bits));
-// }
-
-// inline uint16_t float_to_fixed_uint16(float_t input, uint8_t u8_fixed_point_fractional_bits)
-// {
-//     return (uint16_t)(round(input * (1 << u8_fixed_point_fractional_bits)));
-// }
-
-// inline int16_t float_to_fixed_int16(float_t input, uint8_t u8_fixed_point_fractional_bits)
-// {
-//     return (int16_t)(round(input * (1 << u8_fixed_point_fractional_bits)));
-// }
-
 inline int16_t float_to_fixed(float_t input, uint8_t u8_fixed_point_fractional_bits)
 {
     float_t f_a = input * pow(2.0f, (int8_t)u8_fixed_point_fractional_bits);
@@ -237,8 +234,11 @@ void setup() {
   // start the CAN bus at 500 kbps
   if (!CAN.begin(500E3)) {
     Serial.println("Starting CAN failed!");
+    /* TODO: Statt while Schleife eine Fehlermeldung über WIFI raussenden*/
     while (1);
   }
+  // CAN Filterung der Botschaften - nur Botschaften mit dieser CAN id werden empfangen - alle anderen Botschaften werden verworfen um den Bearbeitungsaufwand zu verringern
+  CAN.filter(create_can_id_from_device_id(DEVICE_ID_IN_CAN_NETWORK), CAN_RECEIVE_FILTER_MASK);
 }
 
 void loop() {
@@ -248,6 +248,8 @@ void loop() {
 
   // Setzt alle Daten in s_batt_pack_data auf 0
   memset(&s_batt_pack_data, 0, sizeof(s_batt_pack_data));
+  // Übernehme die Fehler nach dem raussenden der CAN Pakete des letzten Zyklus für diesen Zyklus
+  s_batt_pack_data.u16_error_bitfield = u16_error_bitfield_after_can_send;
 
   // ############# Auslesen der analogen Messwerte #############################
   read_all_ADC_measurement_values(&s_batt_pack_data);
@@ -269,8 +271,10 @@ void loop() {
 
   // ############# Sende gesammelte Daten über CAN #############################
   //u16_errors = can_send_batt_pack_data(&s_batt_pack_data);
-  /* Neue Fehlerbits in lokale Batteriestruktur schreiben*/
-  s_batt_pack_data.u16_error_bitfield |= u16_errors;
+  // Reset aller error Bits aus dem letzten Zyklus
+  u16_error_bitfield_after_can_send = 0u;
+  /* Neue Fehlerbits zwischenspeichern*/
+  u16_error_bitfield_after_can_send |= u16_errors;
 
   // ############# Fehlerbehandlung wenn CAN Kommunikation fehlschlaegt #############################
   /* Statusabfrage CAN SEND: Wenn keine Übertragung möglich TODO: Konzept überlegen
@@ -279,15 +283,76 @@ void loop() {
         Wenn kein ACK kommt nach 1h erneut versuchen zu verbinden. Insgesamt 5 Versuche bis endgültig abgebrochen wird
         ueber WIFI - verbraucht sonst zuviel Strom. Ueber CAN wird einfach immer weiter versucht.
   */
-  if(check_bit_16bit(s_batt_pack_data.u16_error_bitfield, ERROR_BIT_AT_LEAST_ONE_CAN_BEGIN_OR_END_FAILED) 
-  || check_bit_16bit(s_batt_pack_data.u16_error_bitfield, ERROR_BIT_AT_LEAST_ONE_CAN_WRITE_FAILED)
-  || check_bit_16bit(s_batt_pack_data.u16_error_bitfield, ERROR_BIT_CANNOT_CONNECT_TO_CAN))
+  if(check_bit_16bit(u16_error_bitfield_after_can_send, ERROR_BIT_AT_LEAST_ONE_CAN_BEGIN_OR_END_FAILED) 
+  || check_bit_16bit(u16_error_bitfield_after_can_send, ERROR_BIT_AT_LEAST_ONE_CAN_WRITE_FAILED)
+  || check_bit_16bit(u16_error_bitfield_after_can_send, ERROR_BIT_CANNOT_CONNECT_TO_CAN))
   {
-    // Hier die Behandlung für den fehlgeschlagenen CAN einfuegen
+    // TODO Hier die Behandlung für den fehlgeschlagenen CAN einfuegen
   }
 
+  // Messung der Skriptlaufzeit ohne die Pollingschleife
   uint32_t u32_microseconds_end = micros();
   u32_micros_script_duration = u32_microseconds_end - u32_microseconds_start;
+
+  // ############# POLLING - Empfange Daten über CAN (Polling ist notwendig da der D1 Mini kein SPI mit interrupt unterstützt) #############################
+  #if(DEBUG_PRINT_ON)
+  Serial.println("");
+  Serial.print("Started Polling CAN BUS!");
+  #endif
+
+  uint32_t u32_microseconds_polling_start = micros();
+  uint32_t u32_microseconds_polling_end;
+  for(int i=0; i < NOF_MILLISECONDS_WAIT_TIME_FOR_NEXT_CYCLE;i++)
+  {
+    if((i % RECEIVE_POLLING_NOF_SKIPPED_WAIT_MILLISECONDS) == 0)
+    {
+      // Start Polling MPC2515 if it received CAN Messages 
+      uint8_t u8_nof_received_bytes = CAN.pollCANData(au8_rx_buffer, INPUT_BUFFER_SIZE_IN_BYTES);
+
+      // Wenn jetzt noch Bytes vorhanden sind, war der Empfangspuffer in diesem Skript zu klein --> Fehler !!!
+      if(CAN.available())
+      {
+        // Fehlermeldung: Möglicher Datenverlust auf dem CAN wegen zu kleinem Empfangsspeicher
+        set_bit_16bit(&u16_error_bitfield_after_can_send, ERROR_BIT_POSSIBLE_DATA_LOSS_CAN);
+
+        #if(DEBUG_PRINT_ON)
+        Serial.println("");
+        Serial.print("Possible data loss on CAN due to too small receive buffer.");
+        #endif
+      }
+      // Wenn eine Botschaft empfangen wurde starte das Handling der Botschaft
+      if(u8_nof_received_bytes > 0u)
+      {
+        #if(DEBUG_PRINT_ON)
+        Serial.println("");
+        Serial.print("Number of received bytes: ");
+        Serial.print(u8_nof_received_bytes);
+        Serial.println("");
+        for(uint8_t i = 0; i < u8_nof_received_bytes; i++)
+        {
+          Serial.print(au8_rx_buffer[i], HEX);
+          Serial.print(" ");
+        }
+        #endif
+
+        
+      }
+    }
+    delay(1);
+    // Sicherstellen das die Warteschleife nicht viel länger läuft als die eingestellte Anzahl an Millisekunden
+    u32_microseconds_polling_end = micros();
+    uint32_t u32_time_diff = (u32_microseconds_polling_end - u32_microseconds_polling_start);
+    if(u32_time_diff > (NOF_MILLISECONDS_WAIT_TIME_FOR_NEXT_CYCLE * 1000))
+    {
+      #if(DEBUG_PRINT_ON)
+      Serial.println("");
+      Serial.print("Wartezeit in µs: ");
+      Serial.print(u32_time_diff);
+      #endif
+
+      break;
+    }
+  }
 
   #if(DEBUG_PRINT_ON)
   Serial.println("");
@@ -301,51 +366,14 @@ void loop() {
   Serial.print(u32_micros_script_duration);
   Serial.print("µs");
   Serial.println("");
-
-  Serial.println("");
-  Serial.println("");
-  Serial.println("");
-  Serial.println("");
   #endif
 
-  // ############# POLLING - Empfange Daten über CAN #############################
   #if(DEBUG_PRINT_ON)
   Serial.println("");
-  Serial.print("Started Polling CAN BUS!");
+  Serial.println("");
+  Serial.println("");
+  Serial.println("");
   #endif
-  for(int i=0; i < NOF_MILLISECONDS_WAIT_TIME_FOR_NEXT_CYCLE;i++)
-  {
-    if((i % RECEIVE_POLLING_NOF_SKIPPED_WAIT_MILLISECONDS) == 0)
-    {
-      uint8_t au8_test[8];
-      // Start Polling MPC2515 if it received CAN Messages
-      uint8_t u8_nof_received_bytes = CAN.pollCANData(au8_test, 8u);
-      // Wenn jetzt noch Bytes vorhanden sind, war der Empfangspuffer in diesem Skript zu klein --> Fehler !!!
-      if(CAN.available())
-      {
-        // Fehlermeldung: Möglicher Datenverlust auf dem CAN wegen zu kleinem Empfangsspeicher
-
-      }
-      // Wenn eine Botschaft empfangen wurde starte das Handling der Botschaft
-      if(u8_nof_received_bytes > 0u)
-      {
-        #if(DEBUG_PRINT_ON)
-        Serial.println("");
-        Serial.print("Number of received bytes: ");
-        Serial.print(u8_nof_received_bytes);
-        Serial.println("");
-        for(uint8_t i = 0; i < u8_nof_received_bytes; i++)
-        {
-          Serial.print(au8_test[i], HEX);
-          Serial.print(" ");
-        }
-        #endif
-
-        
-      }
-    }
-    delay(1);
-  }
 }
 
 
@@ -671,5 +699,12 @@ uint16_t can_send_batt_pack_data(t_batt_pack_data *ps_batt_pack_data)
   #endif
 
   return u16_status;
+}
+
+uint16_t create_can_id_from_device_id(uint8_t u8_device_id)
+{
+  // Dokumentation zur Berechnung und Logik dahinter in Libre Office Dokument Smarthome_CAN_Doku.ods
+  uint16_t u16_temp = (uint16_t)u8_device_id;
+  return (u16_temp<<3);
 }
 
