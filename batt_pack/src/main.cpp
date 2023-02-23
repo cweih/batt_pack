@@ -3,6 +3,15 @@
 #include <ShiftRegister74HC595.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
+#include <ESP8266WiFi.h>
+#include <Ticker.h>
+#include <espMqttClient.h>
+#include <string>
+#include <TimeLib.h>
+#include <math.h>
+#include <stdio.h>
+#include <stddef.h>
+#include <stdlib.h>
 
 // ########### Defines #######################
 
@@ -14,15 +23,18 @@
 
 // ++++ Für die Temperatursensoren ++++
 #define ONE_WIRE_BUS (2) // Daten werden über diesen Pin gesendet und empfangen (PIN 2 entspricht D4)
-#define TEMP_SENS_ADDR_0 {0x28, 0xDC, 0x91, 0x82, 0x31, 0x21, 0x03, 0x91} // One Wire Bus Adresse von Sensor 0
-#define TEMP_SENS_ADDR_1 {0x28, 0xFB, 0x90, 0x9D, 0x31, 0x21, 0x03, 0xCD} // One Wire Bus Adresse von Sensor 1
-#define TEMP_SENS_ADDR_2 {0x28, 0xA7, 0x82, 0x60, 0x31, 0x21, 0x03, 0x8D} // One Wire Bus Adresse von Sensor 2
+#define TEMP_SENS_RESOLUTION (12) // [9-12] 9bit bis 12bit Resolution: Je höher die Resolution desto genauer die Temperaturmessung aber je länger muss man auf das Ergebnis warten (750ms bei 12 bit)
+#define TEMP_SENS_WAIT_TIME_NEXT_TEMP_READING_MILLIS (15000u) // [ms] Anzahl an Millisekunden Wartezeit zwischen zwei Temperaturmessungen
+#define MAX_NOF_TEMP_SENSORS (6) // [] Maximale Anzahl von Temperatursensoren die angeschlossen werden können
+// #define TEMP_SENS_ADDR_0 {0x28, 0xDC, 0x91, 0x82, 0x31, 0x21, 0x03, 0x91} // One Wire Bus Adresse von Sensor 0
+// #define TEMP_SENS_ADDR_1 {0x28, 0xFB, 0x90, 0x9D, 0x31, 0x21, 0x03, 0xCD} // One Wire Bus Adresse von Sensor 1
+// #define TEMP_SENS_ADDR_2 {0x28, 0xA7, 0x82, 0x60, 0x31, 0x21, 0x03, 0x8D} // One Wire Bus Adresse von Sensor 2
 
 // ++++ Für die ADC Messungen ++++++++++
-#define CURR_SENS_ABSOLUTE_MEASUREMENT_RANGE (10.0f)  // [A] Strommessspanne von -5 bis 5 Ampere macht 10A absolut
+#define CURR_SENS_ABSOLUTE_MEASUREMENT_RANGE (28.0f)  // [A] Strommessspanne von -5 bis 5 Ampere macht 10A absolut
 #define CURR_SENS_ADC_BIT_RESOLUTION (1024)           // Wertebereich am ADC von 0 bis 1024
-#define CURR_SENS_MEASUREMENT_RANGE_OFFSET (-5.0f)    // [A] Messwertbereich geht nicht von 0 bis 10 sondern von -5 bis 5, muss also um -5 verschoben werden
-#define CURR_SENS_ADC_ZERO_POINT_CORRECTION (-14.0f)  // [] Korrektur des Nullpunkts, sodass bei 0A tatsaechlich auch 0A gemessen werden
+#define CURR_SENS_MEASUREMENT_RANGE_OFFSET (-13.9f)    // [A] Messwertbereich geht nicht von 0 bis 10 sondern von -5 bis 5, muss also um -5 verschoben werden
+#define CURR_SENS_ADC_ZERO_POINT_CORRECTION (3.0f)  // [] Korrektur des Nullpunkts, sodass bei 0A tatsaechlich auch 0A gemessen werden
 
 #define VOLTAGE_SENS_BATTERY_PACK_RANGE (65.0f)       // [V] Messspanne fuer die Messung der Battery Pack Spannung
 #define VOLTAGE_SENS_MEASUREMENT_RANGE_OFFSET (0.0f)  // [V] Messoffset (Nullpunktverschiebung) fuer die Messung der Battery Pack Spannung - kein Offset vorhanden
@@ -45,15 +57,27 @@
 #define CAN_ID_PAKET_1  (1) // Paket ID (Arbitrierungs ID) für die CAN Kommunikation (anhand dieser Nummer wird das Paket eindeutig identifiziert)
 #define CAN_ID_PAKET_2  (2) // Paket ID (Arbitrierungs ID) für die CAN Kommunikation (anhand dieser Nummer wird das Paket eindeutig identifiziert)
 
+// WIFI
+#define MAX_NOF_RECONNECT_TRIES_BEVORE_ECU_RESET (100u) // [0-254]
+ 
+// MQTT
+#define MILLISECONDS_TO_PUBLISH_KEEP_ALIVE (10000u)
+#define MILLISECONDS_TO_PUBLISH_SIGNAL_STRENGTH (60000u)
+#define MQTT_HOST IPAddress(192, 168, 178, 44)
+#define MQTT_PORT 1883
+#define MQTT_RETAIN_MESSAGE (true)
+#define MQTT_DO_NOT_RETAIN_MESSAGE (false)
+#define MQTT_QOS_0 (0)
+#define MQTT_QOS_1 (1)
+#define MQTT_QOS_2 (2)
+
 // ++++ Error Codes ++++++++
 #define ERROR_BITFIELD_INIT                            (  0u) // Kein Fehler ist aufgetreten
 #define ERROR_BIT_CANNOT_CONNECT_TO_CAN                (  0u) // Can communication konnte nicht aufgesetzt werden (checke das CAN board (Kondensator kaput?) oder die Verkabelung vom SPI des D1 Mini zum CAN Board (MPC2515))
 #define ERROR_BIT_AT_LEAST_ONE_CAN_BEGIN_OR_END_FAILED (  1u) // Bei mindestens einem der CAN Pakete ist es beim Aufrufen der Funktion "begin" oder "end" zu einem Fehler gekommen
 #define ERROR_BIT_AT_LEAST_ONE_CAN_WRITE_FAILED        (  2u) // Bei mindestens einem der CAN Pakete ist es beim Aufrufen der Funktion "write" zu einem Fehler gekommen
-#define ERROR_BIT_TEMP_SENS_0_DISCONNECTED             (  3u) // Temperatursensor 0 nicht mehr erreichbar
-#define ERROR_BIT_TEMP_SENS_1_DISCONNECTED             (  4u) // Temperatursensor 1 nicht mehr erreichbar
-#define ERROR_BIT_TEMP_SENS_2_DISCONNECTED             (  5u) // Temperatursensor 2 nicht mehr erreichbar
-#define ERROR_BIT_POSSIBLE_DATA_LOSS_CAN               (  6u) // Auf dem CAN wurden mehr Bytes empfangen als vom Empfangsbuffer aufgenommen werden konnten
+#define ERROR_BIT_TEMP_SENS_DISCONNECTED               (  3u) // Einer der Temperatursensoren ist nicht mehr erreichbar
+#define ERROR_BIT_POSSIBLE_DATA_LOSS_CAN               (  4u) // Auf dem CAN wurden mehr Bytes empfangen als vom Empfangsbuffer aufgenommen werden konnten
 
 // ++++ Fixed Point Umwandlung ++++++
 /// Fixed-point Format: 7.9 (16-bit)
@@ -68,7 +92,20 @@
 // ++++ Hilfsdefines ++++
 #define SMALL_FLOAT_VAL (0.0001f) // Kleiner float Wert der bei float Gleichheitsprüfungen als Toleranzwert dient
 #define DEBUG_PRINT_ON (1) // Setze ungleich Null wenn über serielle Schnittstelle Debuginformationen ausgegeben werden sollen und 0 wenn nicht
+#define MILLISECONDS_FOR_ECU_REBOOT (75600000u)// [unsigned in 32 bit] Anzahl an Millisekunden nach denen sich die ECU neustartet
+#define NO_SCHEDULED_ECU_REBOOT (false)// [bool] Wenn die ECU nicht zu einer bestimmten Uhrzeit (oder Datum etc.) neugestartet werden soll
+#define NO_TIMELESS_SCHEDULED_ECU_REBOOT (true)// [bool] Wenn die ECU nicht nach Ablauf eines timers neugestartet werden soll
+#define MILLISECONDS_FOR_AUTONOMOUS_MODE_WHEN_MISSING_MASTER (300000u)// [unsigned in 32 bit] Anzahl an Millisekunden nach denen in die ECU in den Automatikmodus wechselt wenn die globaltime Botschaft ausbleibt
+
 //############ Globale Variablen ###############
+// KONFIGURIERE HIER
+// Wifi
+const char* SSID = "Dieter seine weisse Box";
+const char* PSK = "NS3e0853H1r117u";
+// MQTT
+const char* MQTT_BROKER = "raspismarthome";
+const char* MQTT_DEVICE_NAME = "huehnerstall_esp8266_1";
+
 uint32_t u32_micros_script_duration = 0ul;
 // Variablen für das Relais Board
 int schalterzustand = 1;
@@ -86,12 +123,24 @@ ShiftRegister74HC595<NUMBER_OF_SHIFT_REGISTERS> shift_register_obj;
 // ++++ Für die Temperatursensoren ++++
 OneWire one_wire(ONE_WIRE_BUS); // Erzeuge ein oneWire Objekt um mit einem oneWire Gerät zu kommunizieren
 DallasTemperature temp_sensors(&one_wire); //Erzeuge ein DallasTemperature Objekt mit Verweis auf das zu nutzende oneWire Objekt
-int16_t i16_device_count = 0;
-float f_temp_in_grad;
 DeviceAddress Thermometer;
-uint8_t au8_temp_sens_0_addr[8] = TEMP_SENS_ADDR_0;
-uint8_t au8_temp_sens_1_addr[8] = TEMP_SENS_ADDR_1;
-uint8_t au8_temp_sens_2_addr[8] = TEMP_SENS_ADDR_2;
+uint32_t u32_temp_conversiontime = 0u;
+uint32_t u32_last_temp_read_time[MAX_NOF_TEMP_SENSORS] = {0u};
+float_t af_temp_in_grad[MAX_NOF_TEMP_SENSORS] = {-127.0f};
+float_t f_temp_in_grad_last_publish = 0.0f;
+uint8_t au8_temp_sens_addr[MAX_NOF_TEMP_SENSORS][8] = {0};
+uint8_t u8_temp_sens_device_count = 0;
+
+uint32_t u32_milliseconds_mqtt_keep_alive_starttime = 0u;
+uint32_t u32_milliseconds_mqtt_signal_strength_starttime = 0u;
+
+wl_status_t s_wifi_begin_status = WL_DISCONNECTED;
+uint8_t u8_wifi_disconnect_cntr = 0u;
+uint8_t u8_mqtt_keep_alive_cntr = 0u;
+uint32_t u32_last_reboot_time = 0u;
+bool b_autonomous_mode = false;
+bool b_master_sent_reset_command = false;
+uint32_t u32_last_master_alive_seen_time = 0u;
 
 // ++++ Variablen für den ADC Kanal Schalter (CD74HC4067) ++++++++
 const uint8_t number_of_channel_select_pins=4;
@@ -116,9 +165,12 @@ uint8_t adc_channel_pin_mapping[16][number_of_channel_select_pins]={
 
 //############# Strukturen ############
 typedef struct t_batt_pack_data {
-	float_t f_temp_sens_0_val; // [Grad Celsius] Gemessene Temperatur von Temperatursensor 0
-  float_t f_temp_sens_1_val; // [Grad Celsius] Gemessene Temperatur von Temperatursensor 1
-  float_t f_temp_sens_2_val; // [Grad Celsius] Gemessene Temperatur von Temperatursensor 2
+	float_t f_temp_busbar_plus; // [Grad Celsius] Gemessene Temperatur der Anschlussbusbar plus
+  float_t f_temp_busbar_minus; // [Grad Celsius] Gemessene Temperatur der Anschlussbusbar minus
+  float_t f_temp_cable_shoe_1;// [Grad Celsius] Gemessene Temperatur am Kabelschuh des internen Verbindungskabels (Verbindung zwischen oberen und unteren 8 Zellen)
+  float_t f_temp_cable_shoe_2;// [Grad Celsius] Gemessene Temperatur am Kabelschuh des internen Verbindungskabels (Verbindung zwischen oberen und unteren 8 Zellen)
+  float_t f_temp_air_heating_side;// [Grad Celsius] Gemessene Temperatur der Luft auf Seite der Heizung
+  float_t f_temp_air_cold_side;// [Grad Celsius] Gemessene Temperatur der Luft auf der Seite ohne Heizung
   float_t f_fan_current; // [A] Gemessene Stromstaerke der Luefterversorgungsleitung
   float_t f_heating_current; // [A] Gemessene Stromstärke der Luefterversorgungsleitung
   float_t f_voltage_sens_battery_pack; // [V] Gemessene Spannung an den äußeren Klemmen des Battery Packs
@@ -142,6 +194,7 @@ uint16_t read_temperatures_from_all_connected_sensors(t_batt_pack_data *ps_batt_
 void read_all_ADC_measurement_values(t_batt_pack_data *ps_batt_pack_data);
 float_t get_mean_of_n_ADC_samples(uint16_t u16_nof_samples);
 uint16_t create_can_id_from_device_id(uint8_t u8_device_id);
+void read_multi_temp_non_blocking_with_wait_time(uint32_t u32_wait_time_millis);
 
 #if(DEBUG_PRINT_ON)
 void print_temperatures_from_all_connected_sensors(t_batt_pack_data *ps_batt_pack_data);
@@ -212,12 +265,25 @@ void setup() {
   // Serial.print(device_count, DEC);
   // Serial.println(" Temperatursensoren.");
   // Serial.println("");
-
+  #if(DEBUG_PRINT_ON)
   // start serial port
   Serial.begin(9600);
+  #endif
 
   // Start up the library
   temp_sensors.begin();
+  u32_temp_conversiontime = (uint32_t)(750 / (1 << (12 - TEMP_SENS_RESOLUTION)));
+  u8_temp_sens_device_count = temp_sensors.getDeviceCount();
+  for (uint8_t i = 0;  i < u8_temp_sens_device_count;  i++)
+  {
+    #if(DEBUG_PRINT_ON)
+    Serial.print("Sensor ");
+    Serial.print((int)i+1);
+    Serial.print(" : ");
+    #endif
+    temp_sensors.getAddress(au8_temp_sens_addr[i], i);
+    u32_last_temp_read_time[i] = millis();
+  }
 
   // ACHTUNG: RX und TX Pin werden als GPIOs umdefiniert!
   shift_register_obj.begin(SHIFT_REGISTER_DATA_PIN_NO, SHIFT_REGISTER_CLOCK_PIN_NO, SHIFT_REGISTER_OUTPUT_PIN_NO);
@@ -270,7 +336,7 @@ void loop() {
   /* Hier auch plausibilitaetschecks durchfuehren wie z.B. Luefter aus aber trotzdem fliesst Strom - same with Heizung - */
 
   // ############# Sende gesammelte Daten über CAN #############################
-  //u16_errors = can_send_batt_pack_data(&s_batt_pack_data);
+  u16_errors = can_send_batt_pack_data(&s_batt_pack_data);
   // Reset aller error Bits aus dem letzten Zyklus
   u16_error_bitfield_after_can_send = 0u;
   /* Neue Fehlerbits zwischenspeichern*/
@@ -403,63 +469,46 @@ uint16_t read_temperatures_from_all_connected_sensors(t_batt_pack_data *ps_batt_
 {
   uint16_t u16_status = ERROR_BITFIELD_INIT;
   // Starten der Temperaturmessung an allen angeschlossenen Sensoren
-  temp_sensors.requestTemperatures();
-  // Schreiben der einzelnen Temperaturmesswerte in interne Datenstruktur
-  ps_batt_pack_data->f_temp_sens_0_val = temp_sensors.getTempC(au8_temp_sens_0_addr);
-  ps_batt_pack_data->f_temp_sens_1_val = temp_sensors.getTempC(au8_temp_sens_1_addr);
-  ps_batt_pack_data->f_temp_sens_2_val = temp_sensors.getTempC(au8_temp_sens_2_addr);
-
-  // Ueberpruefen auf Fehler und setzen der entsprechenden Fehlerbits
-  if(fabs(ps_batt_pack_data->f_temp_sens_0_val - (float_t)DEVICE_DISCONNECTED_C) < SMALL_FLOAT_VAL)
+  read_multi_temp_non_blocking_with_wait_time(TEMP_SENS_WAIT_TIME_NEXT_TEMP_READING_MILLIS);
+  for(uint8_t u8_i; u8_i < u8_temp_sens_device_count; u8_i++)
   {
-      set_bit_16bit(&u16_status, ERROR_BIT_TEMP_SENS_0_DISCONNECTED);
-      #if(DEBUG_PRINT_ON)
-      Serial.println("");
-      Serial.print("Temperature sensor 0 is disconnected or broken. Value:");
-      Serial.print(u16_status);
-      #endif
+    // Ueberpruefen auf Fehler und setzen der entsprechenden Fehlerbits
+    if(fabs(af_temp_in_grad[u8_i] - (float_t)DEVICE_DISCONNECTED_C) < SMALL_FLOAT_VAL)
+    {
+        set_bit_16bit(&u16_status, ERROR_BIT_TEMP_SENS_DISCONNECTED);
+        #if(DEBUG_PRINT_ON)
+        Serial.println("");
+        Serial.print("Temperature sensor is disconnected or broken.");
+        #endif
+    }
+    else
+    {
+      /* No error occured - do nothing*/
+    }
   }
-  else if (fabs(ps_batt_pack_data->f_temp_sens_1_val - (float_t)DEVICE_DISCONNECTED_C) < SMALL_FLOAT_VAL)
-  {
-    set_bit_16bit(&u16_status, ERROR_BIT_TEMP_SENS_1_DISCONNECTED);
-    #if(DEBUG_PRINT_ON)
-    Serial.println("");
-    Serial.print("Temperature sensor 1 is disconnected or broken. Value");
-    Serial.print(u16_status);
-    #endif
-  }
-  else if (fabs(ps_batt_pack_data->f_temp_sens_2_val - (float_t)DEVICE_DISCONNECTED_C) < SMALL_FLOAT_VAL)
-  {
-    set_bit_16bit(&u16_status, ERROR_BIT_TEMP_SENS_2_DISCONNECTED);
-    #if(DEBUG_PRINT_ON)
-    Serial.println("");
-    Serial.print("Temperature sensor 2 is disconnected or broken. Value");
-    Serial.print(u16_status);
-    #endif
-  }
-  else
-  {
-    /* No error occured - do nothing*/
-  }
+  // Schreibe die Messwerte in die Datenhaltungsstruktur
+  // TODO: Richtige Sortierung vor dem Einbau rausfinden und entsprechend beschriften
+  ps_batt_pack_data->f_temp_air_cold_side     = af_temp_in_grad[0];            
+  ps_batt_pack_data->f_temp_air_heating_side  = af_temp_in_grad[1];
+  ps_batt_pack_data->f_temp_busbar_minus      = af_temp_in_grad[2];
+  ps_batt_pack_data->f_temp_busbar_plus       = af_temp_in_grad[3];
+  ps_batt_pack_data->f_temp_cable_shoe_1      = af_temp_in_grad[4];
+  ps_batt_pack_data->f_temp_cable_shoe_2      = af_temp_in_grad[5];
   return u16_status;
 }
 
 #if(DEBUG_PRINT_ON)
 void print_temperatures_from_all_connected_sensors(t_batt_pack_data *ps_batt_pack_data)
 {
-  Serial.println("");
-  Serial.print("Temp Sensor 0: ");
-  Serial.print(ps_batt_pack_data->f_temp_sens_0_val);
-  Serial.print("C");
-  Serial.println("");
-  Serial.print("Temp Sensor 1: ");
-  Serial.print(ps_batt_pack_data->f_temp_sens_1_val);
-  Serial.print("C");
-  Serial.println("");
-  Serial.print("Temp Sensor 2: ");
-  Serial.print(ps_batt_pack_data->f_temp_sens_2_val);
-  Serial.print("C");
-  Serial.println("");
+  for(uint8_t u8_i; u8_i < u8_temp_sens_device_count; u8_i++)
+  {
+    Serial.println("");
+    Serial.print("Temp Sensor ");
+    Serial.print((int)u8_i);
+    Serial.print(": ");
+    Serial.print(af_temp_in_grad[u8_i]);
+    Serial.print("C");
+  }
 }
 #endif
 //+++++ Funktionen für den ADC Channel Umschalter +++++++++++++
@@ -561,7 +610,7 @@ uint16_t can_send_batt_pack_data(t_batt_pack_data *ps_batt_pack_data)
   if(i_can_begin_end_ret_val == CAN_LIB_RET_VAL_OK)
   {
     // Temperatursensor 0
-    i16_from_float = float_to_fixed(ps_batt_pack_data->f_temp_sens_0_val, FIXED_POINT_FRACTIONAL_BITS_MAX128);
+    i16_from_float = float_to_fixed(ps_batt_pack_data->f_temp_air_cold_side, FIXED_POINT_FRACTIONAL_BITS_MAX128);
     split_16bit_number_into_8bit_int16(i16_from_float, au8_split_from_u16);
     can_write_ret_val &= CAN.write(au8_split_from_u16[0]);
     can_write_ret_val &= CAN.write(au8_split_from_u16[1]);
@@ -572,7 +621,7 @@ uint16_t can_send_batt_pack_data(t_batt_pack_data *ps_batt_pack_data)
     Serial.print(" ");
     #endif
     // Temperatursensor 1
-    i16_from_float = float_to_fixed(ps_batt_pack_data->f_temp_sens_1_val, FIXED_POINT_FRACTIONAL_BITS_MAX128);
+    i16_from_float = float_to_fixed(ps_batt_pack_data->f_temp_air_heating_side, FIXED_POINT_FRACTIONAL_BITS_MAX128);
     split_16bit_number_into_8bit_int16(i16_from_float, au8_split_from_u16);
     can_write_ret_val &= CAN.write(au8_split_from_u16[0]);
     can_write_ret_val &= CAN.write(au8_split_from_u16[1]);
@@ -583,7 +632,7 @@ uint16_t can_send_batt_pack_data(t_batt_pack_data *ps_batt_pack_data)
     Serial.print(" ");
     #endif
     // Temperatursensor 2
-    i16_from_float = float_to_fixed(ps_batt_pack_data->f_temp_sens_2_val, FIXED_POINT_FRACTIONAL_BITS_MAX128);
+    i16_from_float = float_to_fixed(ps_batt_pack_data->f_temp_busbar_minus, FIXED_POINT_FRACTIONAL_BITS_MAX128);
     split_16bit_number_into_8bit_int16(i16_from_float, au8_split_from_u16);
     can_write_ret_val &= CAN.write(au8_split_from_u16[0]);
     can_write_ret_val &= CAN.write(au8_split_from_u16[1]);
@@ -706,5 +755,23 @@ uint16_t create_can_id_from_device_id(uint8_t u8_device_id)
   // Dokumentation zur Berechnung und Logik dahinter in Libre Office Dokument Smarthome_CAN_Doku.ods
   uint16_t u16_temp = (uint16_t)u8_device_id;
   return (u16_temp<<3);
+}
+
+void read_multi_temp_non_blocking_with_wait_time(uint32_t u32_wait_time_millis)
+{
+  for(uint8_t u8_i=0u; u8_i < u8_temp_sens_device_count; u8_i++)
+  {
+    // Wenn die eingestellte Wartezeit für die nächste Temperaturmessung abgelaufen ist
+    if ( (millis() - u32_last_temp_read_time[u8_i]) > u32_wait_time_millis)
+    {
+      // Zeitüberprüfung ob die Konversionszeit von ~750ms abgelaufen ist
+      if ( (millis() - u32_last_temp_read_time[u8_i]) > u32_temp_conversiontime)
+      {
+        af_temp_in_grad[u8_i] = temp_sensors.getTempC(au8_temp_sens_addr[u8_i]);
+        temp_sensors.requestTemperatures();                    // ask for next reading 
+        u32_last_temp_read_time[u8_i] = millis();   
+      }
+    }
+  }
 }
 
