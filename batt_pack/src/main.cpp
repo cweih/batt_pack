@@ -54,6 +54,7 @@
 #define CAN_REC_ARBITRATION_ID_1BYTE_SUB_ID  (16u) // Arbitrierungs ID für ein sub ID Byte für Pack 0 nach CAN Smarthome Doku
 #define CAN_REC_ARBITRATION_ID_2BYTE_SUB_ID  (17u) // Arbitrierungs ID für 2 Sub ID Bytes für Pack 0 nach CAN Smarthome Doku
 #define CAN_REC_2BYTE_SUB_ID_MSG_ID_GLOBALTIME  (1u) // Sub Botschafts ID für die Übertragung des globalen Zeitstempels
+#define CAN_REC_2BYTE_SUB_ID_MSG_ID_SWITCHES  (2u) // Sub Botschafts ID für die Übertragung einiger Schalterzustände
 
 #define CAN_SEND_RASPI_ARBITRATION_ID_1BYTE_SUB_ID  (8u) // Arbitrierungs ID für ein sub ID Byte für Pack 0 zum Raspismarthome nach CAN Smarthome Doku
 #define CAN_SEND_RASPI_ARBITRATION_ID_2BYTE_SUB_ID  (9u) // Arbitrierungs ID für 2 Sub ID Bytes für Pack 0 zum Raspismarthome nach CAN Smarthome Doku
@@ -102,6 +103,33 @@
 #define NO_SCHEDULED_ECU_REBOOT (false)// [bool] Wenn die ECU nicht zu einer bestimmten Uhrzeit (oder Datum etc.) neugestartet werden soll
 #define NO_TIMELESS_SCHEDULED_ECU_REBOOT (true)// [bool] Wenn die ECU nicht nach Ablauf eines timers neugestartet werden soll
 #define MILLISECONDS_FOR_AUTONOMOUS_MODE_WHEN_MISSING_MASTER (60000u)// [unsigned in 32 bit] Anzahl an Millisekunden nach denen in die ECU in den Automatikmodus wechselt wenn die globaltime Botschaft ausbleibt
+
+//############# Strukturen ############
+typedef struct t_batt_pack_data {
+	float_t f_temp_busbar_plus; // [Grad Celsius] Gemessene Temperatur der Anschlussbusbar plus
+  float_t f_temp_busbar_minus; // [Grad Celsius] Gemessene Temperatur der Anschlussbusbar minus
+  float_t f_temp_cable_shoe_1;// [Grad Celsius] Gemessene Temperatur am Kabelschuh des internen Verbindungskabels (Verbindung zwischen oberen und unteren 8 Zellen)
+  float_t f_temp_cable_shoe_2;// [Grad Celsius] Gemessene Temperatur am Kabelschuh des internen Verbindungskabels (Verbindung zwischen oberen und unteren 8 Zellen)
+  float_t f_temp_air_heating_side;// [Grad Celsius] Gemessene Temperatur der Luft auf Seite der Heizung
+  float_t f_temp_air_cold_side;// [Grad Celsius] Gemessene Temperatur der Luft auf der Seite ohne Heizung
+  float_t f_fan_current; // [A] Gemessene Stromstaerke der Luefterversorgungsleitung
+  float_t f_heating_current; // [A] Gemessene Stromstärke der Luefterversorgungsleitung
+  float_t f_voltage_sens_battery_pack; // [V] Gemessene Spannung an den äußeren Klemmen des Battery Packs
+  uint16_t u16_status_bitfield; /* Statusbitfeld der Batterie (Bit 0: Luefter geschaltet, 
+                                                               Bit 1: Heizung geschaltet, 
+                                                               Bit 2: Batterie voll, 
+                                                               Bit 3: Batterie leer, 
+                                                               Bit 4: Daten über WIFI gesendet, 
+                                                               Bit 5: Warnungsbit: Luefter oder Heizung aktiviert bei niedrigem Ladezustand,
+                                                               Rest Reservebits) */
+  uint16_t u16_error_bitfield; // Error codes wie in den defines definiert  
+}t_batt_pack_data;
+
+typedef struct t_batt_pack_data {
+	bool b_fan_switch;
+  bool b_heating_switch;
+  bool b_override;
+}t_batt_pack_states;
 
 //############ Globale Variablen ###############
 // KONFIGURIERE HIER
@@ -170,26 +198,7 @@ uint8_t adc_channel_pin_mapping[16][number_of_channel_select_pins]={
     {1,1,1,1}  //channel 15
   };
 
-//############# Strukturen ############
-typedef struct t_batt_pack_data {
-	float_t f_temp_busbar_plus; // [Grad Celsius] Gemessene Temperatur der Anschlussbusbar plus
-  float_t f_temp_busbar_minus; // [Grad Celsius] Gemessene Temperatur der Anschlussbusbar minus
-  float_t f_temp_cable_shoe_1;// [Grad Celsius] Gemessene Temperatur am Kabelschuh des internen Verbindungskabels (Verbindung zwischen oberen und unteren 8 Zellen)
-  float_t f_temp_cable_shoe_2;// [Grad Celsius] Gemessene Temperatur am Kabelschuh des internen Verbindungskabels (Verbindung zwischen oberen und unteren 8 Zellen)
-  float_t f_temp_air_heating_side;// [Grad Celsius] Gemessene Temperatur der Luft auf Seite der Heizung
-  float_t f_temp_air_cold_side;// [Grad Celsius] Gemessene Temperatur der Luft auf der Seite ohne Heizung
-  float_t f_fan_current; // [A] Gemessene Stromstaerke der Luefterversorgungsleitung
-  float_t f_heating_current; // [A] Gemessene Stromstärke der Luefterversorgungsleitung
-  float_t f_voltage_sens_battery_pack; // [V] Gemessene Spannung an den äußeren Klemmen des Battery Packs
-  uint16_t u16_status_bitfield; /* Statusbitfeld der Batterie (Bit 0: Luefter geschaltet, 
-                                                               Bit 1: Heizung geschaltet, 
-                                                               Bit 2: Batterie voll, 
-                                                               Bit 3: Batterie leer, 
-                                                               Bit 4: Daten über WIFI gesendet, 
-                                                               Bit 5: Warnungsbit: Luefter oder Heizung aktiviert bei niedrigem Ladezustand,
-                                                               Rest Reservebits) */
-  uint16_t u16_error_bitfield; // Error codes wie in den defines definiert  
-}t_batt_pack_data;
+t_batt_pack_states s_batt_pack_states;
 
 //############# Funktionsprototypen ############
 void printAddress(DeviceAddress deviceAddress);
@@ -284,6 +293,9 @@ void setup() {
   // start serial port
   Serial.begin(9600);
   #endif
+
+  // Initialisieren auf 0
+  memset(&s_batt_pack_states, 0, sizeof(s_batt_pack_states));
 
   // Start up the library
   temp_sensors.begin();
@@ -941,6 +953,40 @@ void poll_can_bus_single(t_batt_pack_data *ps_batt_pack_data)
         Serial.print("   Sekunde: ");
         Serial.print(second());
         #endif
+      }
+      // Wenn Schalterzustandsbotschaft...
+      else if (u16_two_byte_sub_id == CAN_REC_2BYTE_SUB_ID_MSG_ID_SWITCHES)
+      {
+        // Wenn sich am Zustand des Heizungsschalters etwas geändert hat
+        if((bool)au8_rx_buffer[0] != s_batt_pack_states.b_heating_switch)
+        {
+          s_batt_pack_states.b_heating_switch = (bool)au8_rx_buffer[0];
+          #if DEBUG_PRINT_ON
+          Serial.println("");
+          Serial.print("Heizung jetzt: ");
+          Serial.print((int)s_batt_pack_states.b_heating_switch);
+          #endif
+        }
+        // Wenn sich am Zustand des Lüfterschalters etwas geändert hat
+        if((bool)au8_rx_buffer[1] != s_batt_pack_states.b_fan_switch)
+        {
+          s_batt_pack_states.b_fan_switch = (bool)au8_rx_buffer[1];
+          #if DEBUG_PRINT_ON
+          Serial.println("");
+          Serial.print("Lüfter jetzt: ");
+          Serial.print((int)s_batt_pack_states.b_fan_switch);
+          #endif
+        }
+        // Wenn sich am Zustand des Overrides etwas geändert hat
+        if((bool)au8_rx_buffer[1] != s_batt_pack_states.b_fan_switch)
+        {
+          s_batt_pack_states.b_override = (bool)au8_rx_buffer[2];
+          #if DEBUG_PRINT_ON
+          Serial.println("");
+          Serial.print("ACHTUNG - OVERRIDE GEAENDERT: ");
+          Serial.print((int)s_batt_pack_states.b_override);
+          #endif
+        }
       }
       else
       {
