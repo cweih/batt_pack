@@ -62,6 +62,7 @@
 #define CAN_SEND_RASPI_2BYTE_SUB_ID_MSG_ID_TEMP2  (2u) // Sub Botschafts ID für die Übertragung der zweiten drei Temperaturen
 #define CAN_SEND_RASPI_2BYTE_SUB_ID_MSG_ID_CURRENT  (3u) // Sub Botschafts ID für die Übertragung der zwei gemessenen Ströme und der Batteriespannung
 #define CAN_SEND_RASPI_2BYTE_SUB_ID_MSG_ID_STATUSERROR  (4u) // Sub Botschafts ID für die Übertragung des Status und der Error Bits
+#define CAN_SEND_RASPI_2BYTE_SUB_ID_MSG_ID_SWITCHSTATES  (5u) // Sub Botschafts ID für die Übertragung des Status und der Error Bits
 
 // WIFI
 #define MAX_NOF_RECONNECT_TRIES_BEVORE_ECU_RESET (100u) // [0-254]
@@ -125,10 +126,10 @@ typedef struct t_batt_pack_data {
   uint16_t u16_error_bitfield; // Error codes wie in den defines definiert  
 }t_batt_pack_data;
 
-typedef struct t_batt_pack_data {
-	bool b_fan_switch;
-  bool b_heating_switch;
-  bool b_override;
+typedef struct t_batt_pack_states {
+	bool b_fan_switch;             // [an/aus] Zustand des Lüfters 
+  bool b_heating_switch;         // [an/aus] Zustand der Heizung
+  bool b_override;               // [an/aus] Zustand des Override Schalters - Wenn Override aktiviert ist, darf der Steuerbefehl für Lüfter und Heizung nicht von internen Algorithmen überschrieben werden sondern wird von Aussen (aus iobroker) vorgegeben 
 }t_batt_pack_states;
 
 //############ Globale Variablen ###############
@@ -326,7 +327,9 @@ void setup() {
   CAN.setClockFrequency(8e6);
   // start the CAN bus at 500 kbps
   if (!CAN.begin(500E3)) {
+    #if (DEBUG_PRINT_ON)
     Serial.println("Starting CAN failed!");
+    #endif
     /* TODO: Statt while Schleife eine Fehlermeldung über WIFI raussenden*/
     while (1);
   }
@@ -599,44 +602,44 @@ uint16_t can_send_batt_pack_data(t_batt_pack_data *ps_batt_pack_data)
     // Temperatursensor Kalte Seite
     i16_from_float = float_to_fixed(ps_batt_pack_data->f_temp_air_cold_side, FIXED_POINT_FRACTIONAL_BITS_MAX128);
     split_16bit_number_into_8bit_int16(i16_from_float, au8_split_from_u16);
-    can_write_ret_val &= CAN.write(au8_split_from_u16[0]);
     can_write_ret_val &= CAN.write(au8_split_from_u16[1]);
+    can_write_ret_val &= CAN.write(au8_split_from_u16[0]);
     #if(DEBUG_PRINT_ON)
-    Serial.print(au8_split_from_u16[0], HEX);
-    Serial.print(" ");
     Serial.print(au8_split_from_u16[1], HEX);
+    Serial.print(" ");
+    Serial.print(au8_split_from_u16[0], HEX);
     Serial.print(" ");
     #endif
     // Temperatursensor beheizte Seite
     i16_from_float = float_to_fixed(ps_batt_pack_data->f_temp_air_heating_side, FIXED_POINT_FRACTIONAL_BITS_MAX128);
     split_16bit_number_into_8bit_int16(i16_from_float, au8_split_from_u16);
-    can_write_ret_val &= CAN.write(au8_split_from_u16[0]);
     can_write_ret_val &= CAN.write(au8_split_from_u16[1]);
+    can_write_ret_val &= CAN.write(au8_split_from_u16[0]);
     #if(DEBUG_PRINT_ON)
-    Serial.print(au8_split_from_u16[0], HEX);
-    Serial.print(" ");
     Serial.print(au8_split_from_u16[1], HEX);
+    Serial.print(" ");
+    Serial.print(au8_split_from_u16[0], HEX);
     Serial.print(" ");
     #endif
     // Temperatursensor Busbar Minus
     i16_from_float = float_to_fixed(ps_batt_pack_data->f_temp_busbar_minus, FIXED_POINT_FRACTIONAL_BITS_MAX128);
     split_16bit_number_into_8bit_int16(i16_from_float, au8_split_from_u16);
-    can_write_ret_val &= CAN.write(au8_split_from_u16[0]);
     can_write_ret_val &= CAN.write(au8_split_from_u16[1]);
+    can_write_ret_val &= CAN.write(au8_split_from_u16[0]);
     #if(DEBUG_PRINT_ON)
-    Serial.print(au8_split_from_u16[0], HEX);
-    Serial.print(" ");
     Serial.print(au8_split_from_u16[1], HEX);
+    Serial.print(" ");
+    Serial.print(au8_split_from_u16[0], HEX);
     Serial.print(" ");
     #endif
     // 2 Byte Sub ID dieser Botschaft
     split_16bit_number_into_8bit_int16((int16_t)CAN_SEND_RASPI_2BYTE_SUB_ID_MSG_ID_TEMP1, au8_split_from_u16);
-    can_write_ret_val &= CAN.write(au8_split_from_u16[0]);
     can_write_ret_val &= CAN.write(au8_split_from_u16[1]);
+    can_write_ret_val &= CAN.write(au8_split_from_u16[0]);
     #if(DEBUG_PRINT_ON)
-    Serial.print(au8_split_from_u16[0], HEX);
-    Serial.print(" ");
     Serial.print(au8_split_from_u16[1], HEX);
+    Serial.print(" ");
+    Serial.print(au8_split_from_u16[0], HEX);
     Serial.print(" ");
     #endif
     // Paket abschliessen
@@ -657,44 +660,44 @@ uint16_t can_send_batt_pack_data(t_batt_pack_data *ps_batt_pack_data)
     // Temperatursensor Busbar Plus
     i16_from_float = float_to_fixed(ps_batt_pack_data->f_temp_busbar_plus, FIXED_POINT_FRACTIONAL_BITS_MAX128);
     split_16bit_number_into_8bit_int16(i16_from_float, au8_split_from_u16);
-    can_write_ret_val &= CAN.write(au8_split_from_u16[0]);
     can_write_ret_val &= CAN.write(au8_split_from_u16[1]);
+    can_write_ret_val &= CAN.write(au8_split_from_u16[0]);
     #if(DEBUG_PRINT_ON)
-    Serial.print(au8_split_from_u16[0], HEX);
-    Serial.print(" ");
     Serial.print(au8_split_from_u16[1], HEX);
+    Serial.print(" ");
+    Serial.print(au8_split_from_u16[0], HEX);
     Serial.print(" ");
     #endif
     // Temperatursensor Kabelschuh 1 des Verbindungskabels
     i16_from_float = float_to_fixed(ps_batt_pack_data->f_temp_cable_shoe_1, FIXED_POINT_FRACTIONAL_BITS_MAX128);
     split_16bit_number_into_8bit_int16(i16_from_float, au8_split_from_u16);
-    can_write_ret_val &= CAN.write(au8_split_from_u16[0]);
     can_write_ret_val &= CAN.write(au8_split_from_u16[1]);
+    can_write_ret_val &= CAN.write(au8_split_from_u16[0]);
     #if(DEBUG_PRINT_ON)
-    Serial.print(au8_split_from_u16[0], HEX);
-    Serial.print(" ");
     Serial.print(au8_split_from_u16[1], HEX);
+    Serial.print(" ");
+    Serial.print(au8_split_from_u16[0], HEX);
     Serial.print(" ");
     #endif
     // Temperatursensor Kabelschuh 2 des Verbindungskabels
     i16_from_float = float_to_fixed(ps_batt_pack_data->f_temp_cable_shoe_2, FIXED_POINT_FRACTIONAL_BITS_MAX128);
     split_16bit_number_into_8bit_int16(i16_from_float, au8_split_from_u16);
-    can_write_ret_val &= CAN.write(au8_split_from_u16[0]);
     can_write_ret_val &= CAN.write(au8_split_from_u16[1]);
+    can_write_ret_val &= CAN.write(au8_split_from_u16[0]);
     #if(DEBUG_PRINT_ON)
-    Serial.print(au8_split_from_u16[0], HEX);
-    Serial.print(" ");
     Serial.print(au8_split_from_u16[1], HEX);
+    Serial.print(" ");
+    Serial.print(au8_split_from_u16[0], HEX);
     Serial.print(" ");
     #endif
     // 2 Byte Sub ID dieser Botschaft
     split_16bit_number_into_8bit_int16((int16_t)CAN_SEND_RASPI_2BYTE_SUB_ID_MSG_ID_TEMP2, au8_split_from_u16);
-    can_write_ret_val &= CAN.write(au8_split_from_u16[0]);
     can_write_ret_val &= CAN.write(au8_split_from_u16[1]);
+    can_write_ret_val &= CAN.write(au8_split_from_u16[0]);
     #if(DEBUG_PRINT_ON)
-    Serial.print(au8_split_from_u16[0], HEX);
-    Serial.print(" ");
     Serial.print(au8_split_from_u16[1], HEX);
+    Serial.print(" ");
+    Serial.print(au8_split_from_u16[0], HEX);
     Serial.print(" ");
     #endif
     // Paket abschliessen
@@ -715,44 +718,44 @@ uint16_t can_send_batt_pack_data(t_batt_pack_data *ps_batt_pack_data)
     // Temperatursensor Busbar Plus
     i16_from_float = float_to_fixed(ps_batt_pack_data->f_fan_current, FIXED_POINT_FRACTIONAL_BITS_MAX128);
     split_16bit_number_into_8bit_int16(i16_from_float, au8_split_from_u16);
-    can_write_ret_val &= CAN.write(au8_split_from_u16[0]);
     can_write_ret_val &= CAN.write(au8_split_from_u16[1]);
+    can_write_ret_val &= CAN.write(au8_split_from_u16[0]);
     #if(DEBUG_PRINT_ON)
-    Serial.print(au8_split_from_u16[0], HEX);
-    Serial.print(" ");
     Serial.print(au8_split_from_u16[1], HEX);
+    Serial.print(" ");
+    Serial.print(au8_split_from_u16[0], HEX);
     Serial.print(" ");
     #endif
     // Temperatursensor Kabelschuh 1 des Verbindungskabels
     i16_from_float = float_to_fixed(ps_batt_pack_data->f_heating_current, FIXED_POINT_FRACTIONAL_BITS_MAX128);
     split_16bit_number_into_8bit_int16(i16_from_float, au8_split_from_u16);
-    can_write_ret_val &= CAN.write(au8_split_from_u16[0]);
     can_write_ret_val &= CAN.write(au8_split_from_u16[1]);
+    can_write_ret_val &= CAN.write(au8_split_from_u16[0]);
     #if(DEBUG_PRINT_ON)
-    Serial.print(au8_split_from_u16[0], HEX);
-    Serial.print(" ");
     Serial.print(au8_split_from_u16[1], HEX);
+    Serial.print(" ");
+    Serial.print(au8_split_from_u16[0], HEX);
     Serial.print(" ");
     #endif
     // Temperatursensor Kabelschuh 2 des Verbindungskabels
     i16_from_float = float_to_fixed(ps_batt_pack_data->f_voltage_sens_battery_pack, FIXED_POINT_FRACTIONAL_BITS_MAX128);
     split_16bit_number_into_8bit_int16(i16_from_float, au8_split_from_u16);
-    can_write_ret_val &= CAN.write(au8_split_from_u16[0]);
     can_write_ret_val &= CAN.write(au8_split_from_u16[1]);
+    can_write_ret_val &= CAN.write(au8_split_from_u16[0]);
     #if(DEBUG_PRINT_ON)
-    Serial.print(au8_split_from_u16[0], HEX);
-    Serial.print(" ");
     Serial.print(au8_split_from_u16[1], HEX);
+    Serial.print(" ");
+    Serial.print(au8_split_from_u16[0], HEX);
     Serial.print(" ");
     #endif
     // 2 Byte Sub ID dieser Botschaft
     split_16bit_number_into_8bit_int16((int16_t)CAN_SEND_RASPI_2BYTE_SUB_ID_MSG_ID_CURRENT, au8_split_from_u16);
-    can_write_ret_val &= CAN.write(au8_split_from_u16[0]);
     can_write_ret_val &= CAN.write(au8_split_from_u16[1]);
+    can_write_ret_val &= CAN.write(au8_split_from_u16[0]);
     #if(DEBUG_PRINT_ON)
-    Serial.print(au8_split_from_u16[0], HEX);
-    Serial.print(" ");
     Serial.print(au8_split_from_u16[1], HEX);
+    Serial.print(" ");
+    Serial.print(au8_split_from_u16[0], HEX);
     Serial.print(" ");
     #endif
     // Paket abschliessen
@@ -762,22 +765,79 @@ uint16_t can_send_batt_pack_data(t_batt_pack_data *ps_batt_pack_data)
     Serial.println("Paket 2 gesendet");
     #endif
   }
+  // Polling muss so häufig wie möglich durchgeführt werden um keine Botschaften zu verpassen
+  poll_can_bus_single(ps_batt_pack_data);
+
+  // Paket 4 initialisieren, Werte berechnen, in das Paket schreiben und das Paket abschliessen
+  i_can_begin_end_ret_val &= CAN.beginPacket(CAN_SEND_RASPI_ARBITRATION_ID_2BYTE_SUB_ID);
+  if(i_can_begin_end_ret_val == CAN_LIB_RET_VAL_OK)
+  {
+    // Heizung an/aus
+    can_write_ret_val &= CAN.write((uint8_t)s_batt_pack_states.b_heating_switch);
+    #if(DEBUG_PRINT_ON)
+    Serial.print((uint8_t)s_batt_pack_states.b_heating_switch, HEX);
+    Serial.print(" ");
+    #endif
+    // Lüfter an/aus
+    can_write_ret_val &= CAN.write((uint8_t)s_batt_pack_states.b_fan_switch);
+    #if(DEBUG_PRINT_ON)
+    Serial.print((uint8_t)s_batt_pack_states.b_fan_switch, HEX);
+    Serial.print(" ");
+    #endif
+    // Override an/aus
+    can_write_ret_val &= CAN.write((uint8_t)s_batt_pack_states.b_override);
+    #if(DEBUG_PRINT_ON)
+    Serial.print((uint8_t)s_batt_pack_states.b_override, HEX);
+    Serial.print(" ");
+    #endif
+    // Ungenutztes Byte
+    can_write_ret_val &= CAN.write(0u);
+    #if(DEBUG_PRINT_ON)
+    Serial.print(0u, HEX);
+    Serial.print(" ");
+    #endif
+    // Ungenutzte 2 Byte
+    can_write_ret_val &= CAN.write(0u);
+    can_write_ret_val &= CAN.write(0u);
+    #if(DEBUG_PRINT_ON)
+    Serial.print(0u, HEX);
+    Serial.print(" ");
+    Serial.print(0u, HEX);
+    Serial.print(" ");
+    #endif
+    // 2 Byte Sub ID dieser Botschaft
+    split_16bit_number_into_8bit_int16((int16_t)CAN_SEND_RASPI_2BYTE_SUB_ID_MSG_ID_SWITCHSTATES, au8_split_from_u16);
+    can_write_ret_val &= CAN.write(au8_split_from_u16[1]);
+    can_write_ret_val &= CAN.write(au8_split_from_u16[0]);
+    #if(DEBUG_PRINT_ON)
+    Serial.print(au8_split_from_u16[1], HEX);
+    Serial.print(" ");
+    Serial.print(au8_split_from_u16[0], HEX);
+    Serial.print(" ");
+    #endif
+    // Paket abschliessen - Achtung: moeglicher Fehler in CAN.endPacket wird nicht erkannt und übermittelt
+    CAN.endPacket();
+    #if(DEBUG_PRINT_ON)
+    Serial.println("");
+    Serial.println("Paket 4 gesendet");
+    #endif
+  }
 
   // Polling muss so häufig wie möglich durchgeführt werden um keine Botschaften zu verpassen
   poll_can_bus_single(ps_batt_pack_data);
 
-  // Paket 1 initialisieren, Werte berechnen, in das Paket schreiben und das Paket abschliessen
+  // Paket 3 initialisieren, Werte berechnen, in das Paket schreiben und das Paket abschliessen
   i_can_begin_end_ret_val &= CAN.beginPacket(CAN_SEND_RASPI_ARBITRATION_ID_2BYTE_SUB_ID);
   if(i_can_begin_end_ret_val == CAN_LIB_RET_VAL_OK)
   {
     // Status Bitfeld
     split_16bit_number_into_8bit_int16(int16_t(ps_batt_pack_data->u16_status_bitfield), au8_split_from_u16);
-    can_write_ret_val &= CAN.write(au8_split_from_u16[0]);
     can_write_ret_val &= CAN.write(au8_split_from_u16[1]);
+    can_write_ret_val &= CAN.write(au8_split_from_u16[0]);
     #if(DEBUG_PRINT_ON)
-    Serial.print(au8_split_from_u16[0], HEX);
-    Serial.print(" ");
     Serial.print(au8_split_from_u16[1], HEX);
+    Serial.print(" ");
+    Serial.print(au8_split_from_u16[0], HEX);
     Serial.print(" ");
     #endif
 
@@ -794,12 +854,31 @@ uint16_t can_send_batt_pack_data(t_batt_pack_data *ps_batt_pack_data)
     }
     // Fehler Bitfeld
     split_16bit_number_into_8bit_int16(int16_t(ps_batt_pack_data->u16_error_bitfield), au8_split_from_u16);
-    can_write_ret_val &= CAN.write(au8_split_from_u16[0]);
     can_write_ret_val &= CAN.write(au8_split_from_u16[1]);
+    can_write_ret_val &= CAN.write(au8_split_from_u16[0]);
     #if(DEBUG_PRINT_ON)
+    Serial.print(au8_split_from_u16[1], HEX);
+    Serial.print(" ");
     Serial.print(au8_split_from_u16[0], HEX);
     Serial.print(" ");
+    #endif
+    // Ungenutzte 2 Byte
+    can_write_ret_val &= CAN.write(0u);
+    can_write_ret_val &= CAN.write(0u);
+    #if(DEBUG_PRINT_ON)
+    Serial.print(0u, HEX);
+    Serial.print(" ");
+    Serial.print(0u, HEX);
+    Serial.print(" ");
+    #endif
+    // 2 Byte Sub ID dieser Botschaft
+    split_16bit_number_into_8bit_int16((int16_t)CAN_SEND_RASPI_2BYTE_SUB_ID_MSG_ID_STATUSERROR, au8_split_from_u16);
+    can_write_ret_val &= CAN.write(au8_split_from_u16[1]);
+    can_write_ret_val &= CAN.write(au8_split_from_u16[0]);
+    #if(DEBUG_PRINT_ON)
     Serial.print(au8_split_from_u16[1], HEX);
+    Serial.print(" ");
+    Serial.print(au8_split_from_u16[0], HEX);
     Serial.print(" ");
     #endif
     // Paket abschliessen - Achtung: moeglicher Fehler in CAN.endPacket wird nicht erkannt und übermittelt
@@ -889,20 +968,40 @@ void poll_can_bus_single(t_batt_pack_data *ps_batt_pack_data)
 {
   // Start Polling MPC2515 if it received CAN Messages
   uint8_t u8_nof_received_bytes = CAN.pollCANData(au8_rx_buffer, &u16_rx_can_ids, INPUT_BUFFER_SIZE_IN_BYTES);
+  bool b_CAN_ok = true;
 
-  // Wenn jetzt noch Bytes vorhanden sind, war der Empfangspuffer in diesem Skript zu klein --> Fehler !!!
+  // Wenn jetzt noch Bytes vorhanden sind, war der Empfangspuffer zu klein --> Fehler !!!
   if (CAN.available())
   {
     // Fehlermeldung: Möglicher Datenverlust auf dem CAN wegen zu kleinem Empfangsspeicher
     set_bit_16bit(&u16_error_bitfield_after_can_send, ERROR_BIT_POSSIBLE_DATA_LOSS_CAN);
+    #if (DEBUG_PRINT_ON)
+    Serial.println("");
+    Serial.print("Possible data loss on CAN due to too many messages in too short time.");
+    #endif
+    // Reset des CAN
+    CAN.end();
+    // Neustart
+    if (!CAN.begin(500E3)) 
+    {
+      #if (DEBUG_PRINT_ON)
+      Serial.println("Starting CAN failed!");
+      #endif
+      /* TODO: Statt while Schleife eine Fehlermeldung über WIFI raussenden*/
+      while (1);
+    }
+    // CAN Filterung der Botschaften - nur Botschaften mit dieser CAN id werden empfangen - alle anderen Botschaften werden verworfen um den Bearbeitungsaufwand zu verringern
+    CAN.filter(create_can_id_from_device_id(DEVICE_ID_IN_CAN_NETWORK), CAN_RECEIVE_FILTER_MASK);
+
+    b_CAN_ok = false;
 
     #if (DEBUG_PRINT_ON)
     Serial.println("");
-    Serial.print("Possible data loss on CAN due to too small receive buffer.");
+    Serial.print("CAN restartet successfully.");
     #endif
   }
   // Wenn eine Botschaft empfangen wurde starte das Handling der Botschaft
-  if (u8_nof_received_bytes > 0u)
+  if ((u8_nof_received_bytes > 0u) && b_CAN_ok)
   {
     #if (DEBUG_PRINT_ON)
     Serial.println("");
@@ -978,7 +1077,7 @@ void poll_can_bus_single(t_batt_pack_data *ps_batt_pack_data)
           #endif
         }
         // Wenn sich am Zustand des Overrides etwas geändert hat
-        if((bool)au8_rx_buffer[1] != s_batt_pack_states.b_fan_switch)
+        if((bool)au8_rx_buffer[2] != s_batt_pack_states.b_override)
         {
           s_batt_pack_states.b_override = (bool)au8_rx_buffer[2];
           #if DEBUG_PRINT_ON
