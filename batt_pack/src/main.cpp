@@ -1056,8 +1056,8 @@ void poll_can_bus_single(t_batt_pack_data *ps_batt_pack_data)
       // Wenn Schalterzustandsbotschaft...
       else if (u16_two_byte_sub_id == CAN_REC_2BYTE_SUB_ID_MSG_ID_SWITCHES)
       {
-        // Wenn sich am Zustand des Heizungsschalters etwas geändert hat
-        if((bool)au8_rx_buffer[0] != s_batt_pack_states.b_heating_switch)
+        // Wenn nicht der "nichts geändert" Wert 255 übertragen wurde UND wenn sich am Zustand des Heizungsschalters etwas geändert hat
+        if((au8_rx_buffer[0] <= 1) && ((bool)au8_rx_buffer[0] != s_batt_pack_states.b_heating_switch))
         {
           s_batt_pack_states.b_heating_switch = (bool)au8_rx_buffer[0];
           #if DEBUG_PRINT_ON
@@ -1066,8 +1066,8 @@ void poll_can_bus_single(t_batt_pack_data *ps_batt_pack_data)
           Serial.print((int)s_batt_pack_states.b_heating_switch);
           #endif
         }
-        // Wenn sich am Zustand des Lüfterschalters etwas geändert hat
-        if((bool)au8_rx_buffer[1] != s_batt_pack_states.b_fan_switch)
+        // Wenn nicht der "nichts geändert" Wert 255 übertragen wurde UND Wenn sich am Zustand des Lüfterschalters etwas geändert hat
+        if((au8_rx_buffer[1] <= 1) && ((bool)au8_rx_buffer[1] != s_batt_pack_states.b_fan_switch))
         {
           s_batt_pack_states.b_fan_switch = (bool)au8_rx_buffer[1];
           #if DEBUG_PRINT_ON
@@ -1076,8 +1076,8 @@ void poll_can_bus_single(t_batt_pack_data *ps_batt_pack_data)
           Serial.print((int)s_batt_pack_states.b_fan_switch);
           #endif
         }
-        // Wenn sich am Zustand des Overrides etwas geändert hat
-        if((bool)au8_rx_buffer[2] != s_batt_pack_states.b_override)
+        // Wenn nicht der "nichts geändert" Wert 255 übertragen wurde UND Wenn sich am Zustand des Overrides etwas geändert hat
+        if((au8_rx_buffer[2] <= 1) && (bool)au8_rx_buffer[2] != s_batt_pack_states.b_override)
         {
           s_batt_pack_states.b_override = (bool)au8_rx_buffer[2];
           #if DEBUG_PRINT_ON
