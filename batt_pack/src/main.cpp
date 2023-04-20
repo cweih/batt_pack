@@ -130,6 +130,7 @@ typedef struct t_batt_pack_states {
 	bool b_fan_switch;             // [an/aus] Zustand des Lüfters 
   bool b_heating_switch;         // [an/aus] Zustand der Heizung
   bool b_override;               // [an/aus] Zustand des Override Schalters - Wenn Override aktiviert ist, darf der Steuerbefehl für Lüfter und Heizung nicht von internen Algorithmen überschrieben werden sondern wird von Aussen (aus iobroker) vorgegeben 
+  bool b_val_changed;            // [wahr/falsch] Wenn einer der Werte dieses Structs sich ändert wird b_val_changed auf true gesetzt und nur in diesem Fall als CAN Paket versendet. Wenn das Paket versendet wurde steht der Wert wieder auf false.
 }t_batt_pack_states;
 
 //############ Globale Variablen ###############
@@ -335,6 +336,8 @@ void setup() {
   }
   // CAN Filterung der Botschaften - nur Botschaften mit dieser CAN id werden empfangen - alle anderen Botschaften werden verworfen um den Bearbeitungsaufwand zu verringern
   CAN.filter(create_can_id_from_device_id(DEVICE_ID_IN_CAN_NETWORK), CAN_RECEIVE_FILTER_MASK);
+  // Setze Init Wert für die Zustandsstruktur
+  s_batt_pack_states.b_val_changed = true;
 }
 
 void loop() {
@@ -768,9 +771,9 @@ uint16_t can_send_batt_pack_data(t_batt_pack_data *ps_batt_pack_data)
   // Polling muss so häufig wie möglich durchgeführt werden um keine Botschaften zu verpassen
   poll_can_bus_single(ps_batt_pack_data);
 
-  // Paket 4 initialisieren, Werte berechnen, in das Paket schreiben und das Paket abschliessen
+  // Paket 4 initialisieren, Werte berechnen, in das Paket schreiben und das Paket abschliessen, wenn sich einer der Werte geändert hat
   i_can_begin_end_ret_val &= CAN.beginPacket(CAN_SEND_RASPI_ARBITRATION_ID_2BYTE_SUB_ID);
-  if(i_can_begin_end_ret_val == CAN_LIB_RET_VAL_OK)
+  if((s_batt_pack_states.b_val_changed == true) && (i_can_begin_end_ret_val == CAN_LIB_RET_VAL_OK))
   {
     // Heizung an/aus
     can_write_ret_val &= CAN.write((uint8_t)s_batt_pack_states.b_heating_switch);
@@ -821,6 +824,8 @@ uint16_t can_send_batt_pack_data(t_batt_pack_data *ps_batt_pack_data)
     Serial.println("");
     Serial.println("Paket 4 gesendet");
     #endif
+    // Geänderter Wert versendet - Flag zurücksetzen
+    s_batt_pack_states.b_val_changed = false;
   }
 
   // Polling muss so häufig wie möglich durchgeführt werden um keine Botschaften zu verpassen
@@ -1060,6 +1065,7 @@ void poll_can_bus_single(t_batt_pack_data *ps_batt_pack_data)
         if((au8_rx_buffer[0] <= 1) && ((bool)au8_rx_buffer[0] != s_batt_pack_states.b_heating_switch))
         {
           s_batt_pack_states.b_heating_switch = (bool)au8_rx_buffer[0];
+          s_batt_pack_states.b_val_changed = true;
           #if DEBUG_PRINT_ON
           Serial.println("");
           Serial.print("Heizung jetzt: ");
@@ -1070,6 +1076,7 @@ void poll_can_bus_single(t_batt_pack_data *ps_batt_pack_data)
         if((au8_rx_buffer[1] <= 1) && ((bool)au8_rx_buffer[1] != s_batt_pack_states.b_fan_switch))
         {
           s_batt_pack_states.b_fan_switch = (bool)au8_rx_buffer[1];
+          s_batt_pack_states.b_val_changed = true;
           #if DEBUG_PRINT_ON
           Serial.println("");
           Serial.print("Lüfter jetzt: ");
@@ -1080,6 +1087,7 @@ void poll_can_bus_single(t_batt_pack_data *ps_batt_pack_data)
         if((au8_rx_buffer[2] <= 1) && (bool)au8_rx_buffer[2] != s_batt_pack_states.b_override)
         {
           s_batt_pack_states.b_override = (bool)au8_rx_buffer[2];
+          s_batt_pack_states.b_val_changed = true;
           #if DEBUG_PRINT_ON
           Serial.println("");
           Serial.print("ACHTUNG - OVERRIDE GEAENDERT: ");
