@@ -78,6 +78,10 @@
 #define MQTT_QOS_1 (1)
 #define MQTT_QOS_2 (2)
 
+// Battery Control
+#define FAN0_OUTPUT_PIN_NUMBER (4)
+#define HEATING0_OUTPUT_PIN_NUMBER (5)
+
 // ++++ Error Codes ++++++++
 #define ERROR_BITFIELD_INIT                            (  0u) // Kein Fehler ist aufgetreten
 #define ERROR_BIT_CANNOT_CONNECT_TO_CAN                (  0u) // Can communication konnte nicht aufgesetzt werden (checke das CAN board (Kondensator kaput?) oder die Verkabelung vom SPI des D1 Mini zum CAN Board (MPC2515))
@@ -216,6 +220,7 @@ void read_multi_temp_non_blocking_with_wait_time(uint32_t u32_wait_time_millis);
 void poll_can_bus(t_batt_pack_data *ps_batt_pack_data);
 void poll_can_bus_single(t_batt_pack_data *ps_batt_pack_data);
 void autonomous_mode_handler();
+void control_battery();
 
 #if(DEBUG_PRINT_ON)
 void print_temperatures_from_all_connected_sensors(t_batt_pack_data *ps_batt_pack_data);
@@ -351,7 +356,7 @@ void loop() {
   s_batt_pack_data.u16_error_bitfield = u16_error_bitfield_after_can_send;
 
   // ############# Auslesen der analogen Messwerte #############################
-  read_all_ADC_measurement_values(&s_batt_pack_data);
+  //read_all_ADC_measurement_values(&s_batt_pack_data);
   // ############# Einlesen der Temperatursensoren #############################
   u16_errors = read_temperatures_from_all_connected_sensors(&s_batt_pack_data);
   // Polling muss so häufig wie möglich durchgeführt werden um keine Botschaften zu verpassen
@@ -394,6 +399,8 @@ void loop() {
   // Wenn die Kommunikationsverbindung zum Master abbricht soll der Controller möglichst eigenständig seine Aufgaben durchführen
   // In dieser Funktion wird alles erledigt was dazu nötig ist
   autonomous_mode_handler();
+  // Basierend auf den Messwerten und/oder Schalterzuständen reagiert die Steuerung. Z.B. wird die Heizung ein oder aus geschaltet, der Lüfter ein oder aus oder andere Tasks werden durchgeführt. Alles in control_battery()
+  control_battery();
 
   // Messung der Skriptlaufzeit ohne die Pollingschleife
   uint32_t u32_microseconds_end = micros();
@@ -1133,6 +1140,28 @@ void autonomous_mode_handler()
     #endif
     b_autonomous_mode = false;
     // TODO: WLAN Verbindung und MQTT Verbindung wieder kappen
+  }
+}
+
+
+void control_battery()
+{
+  // Wenn der Schalterzustand von Lüfter, Heizung etc. durch interne oder externe Kontrolle geändert wurde
+  if(s_batt_pack_states.b_val_changed == true)
+  {
+    //...schalte die Output PINs entsprechend um die Relais zu schalten
+    shift_register_obj.setNoUpdate((int)s_batt_pack_states.b_fan_switch, FAN0_OUTPUT_PIN_NUMBER);
+    shift_register_obj.setNoUpdate((int)s_batt_pack_states.b_heating_switch, HEATING0_OUTPUT_PIN_NUMBER);
+    shift_register_obj.updateRegisters();
+
+    #if(DEBUG_PRINT_ON)
+    Serial.println("");
+    Serial.print("FAN0: ");
+    Serial.print((int)s_batt_pack_states.b_fan_switch);
+    Serial.println("");
+    Serial.print("HEATIN0: ");
+    Serial.print((int)s_batt_pack_states.b_heating_switch);
+    #endif
   }
 }
 
