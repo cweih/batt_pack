@@ -19,6 +19,10 @@
 #define SHIFT_REGISTER_DATA_PIN_NO (4) // GPIO Pin Nummer über den die Daten für das Register eingestellt werden
 #define SHIFT_REGISTER_CLOCK_PIN_NO (5) // GPIO Pin Nummer über den die Pulse zum Übernehmen der Daten aus SHIFT_REGISTER_DATA_PIN_NO übertragen werden 
 #define SHIFT_REGISTER_OUTPUT_PIN_NO (0) // GPIO Pin Nummer für den Latch Pin. Wenn hier ein Puls zu sehen ist werden die Daten aus dem Register in den Output übernommen
+#define ADC_CHANNEL_SELECTOR_OUTPUT_PIN_NUMBER_0 (0)
+#define ADC_CHANNEL_SELECTOR_OUTPUT_PIN_NUMBER_1 (1)
+#define ADC_CHANNEL_SELECTOR_OUTPUT_PIN_NUMBER_2 (2)
+#define ADC_CHANNEL_SELECTOR_OUTPUT_PIN_NUMBER_3 (3)
 
 // ++++ Für die Temperatursensoren ++++
 #define ONE_WIRE_BUS (2) // Daten werden über diesen Pin gesendet und empfangen (PIN 2 entspricht D4)
@@ -33,11 +37,11 @@
 #define CURR_SENS_ABSOLUTE_MEASUREMENT_RANGE (28.0f)  // [A] Strommessspanne von -5 bis 5 Ampere macht 10A absolut
 #define CURR_SENS_ADC_BIT_RESOLUTION (1024)           // Wertebereich am ADC von 0 bis 1024
 #define CURR_SENS_MEASUREMENT_RANGE_OFFSET (-13.9f)    // [A] Messwertbereich geht nicht von 0 bis 10 sondern von -5 bis 5, muss also um -5 verschoben werden
-#define CURR_SENS_ADC_ZERO_POINT_CORRECTION (3.0f)  // [] Korrektur des Nullpunkts, sodass bei 0A tatsaechlich auch 0A gemessen werden
+#define CURR_SENS_ADC_ZERO_POINT_CORRECTION (-23.0f)  // [] Korrektur des Nullpunkts, sodass bei 0A tatsaechlich auch 0A gemessen werden
 
-#define VOLTAGE_SENS_BATTERY_PACK_RANGE (65.0f)       // [V] Messspanne fuer die Messung der Battery Pack Spannung
+#define VOLTAGE_SENS_BATTERY_PACK_RANGE (62.75f)       // [V] Messspanne fuer die Messung der Battery Pack Spannung
 #define VOLTAGE_SENS_MEASUREMENT_RANGE_OFFSET (0.0f)  // [V] Messoffset (Nullpunktverschiebung) fuer die Messung der Battery Pack Spannung - kein Offset vorhanden
-#define VOLTAGE_SENS_ADC_ZERO_POINT_CORRECTION (-13.0f)  // [] Korrektur des Nullpunkts, sodass bei 0V tatsaechlich auch 0V gemessen werden
+#define VOLTAGE_SENS_ADC_ZERO_POINT_CORRECTION (-8.0f)  // [] Korrektur des Nullpunkts, sodass bei 0V tatsaechlich auch 0V gemessen werden
 
 #define NUMBER_OF_ADC_SAMPLES_PER_MEASUREMENT (5u) // [] Anzahl an Wiederholungen von ADC Messungen die anschliessend gemitte
 
@@ -79,8 +83,12 @@
 #define MQTT_QOS_2 (2)
 
 // Battery Control
-#define FAN0_OUTPUT_PIN_NUMBER (4)
-#define HEATING0_OUTPUT_PIN_NUMBER (5)
+#define RELAY_OFF_VALUE (1)
+#define RELAY_ON_VALUE (0)
+#define FAN0_MAIN_OUTPUT_PIN_NUMBER (4)
+#define FAN0_BACKUP_OUTPUT_PIN_NUMBER (5)
+#define HEATING0_MAIN_OUTPUT_PIN_NUMBER (6)
+#define HEATING0_BACKUP_OUTPUT_PIN_NUMBER (7)
 
 // ++++ Error Codes ++++++++
 #define ERROR_BITFIELD_INIT                            (  0u) // Kein Fehler ist aufgetreten
@@ -90,6 +98,7 @@
 #define ERROR_BIT_TEMP_SENS_DISCONNECTED               (  3u) // Einer der Temperatursensoren ist nicht mehr erreichbar
 #define ERROR_BIT_POSSIBLE_DATA_LOSS_CAN               (  4u) // Auf dem CAN wurden mehr Bytes empfangen als vom Empfangsbuffer aufgenommen werden konnten
 #define ERROR_BIT_UNKOWN_2BYTE_SUB_ID                  (  5u) // CAN hat eine Botschaft mit einer unbekannten 2 Byte Sub ID empfangen
+#define ERROR_BIT_MISSING_TEMP_SENS_STARTUP            (  6u) // Beim Starten des Controllers wurde mindestens ein Temperatursensor nicht gefunden.
 
 // ++++ Fixed Point Umwandlung ++++++
 /// Fixed-point Format: 7.9 (16-bit)
@@ -167,7 +176,7 @@ DallasTemperature temp_sensors(&one_wire); //Erzeuge ein DallasTemperature Objek
 DeviceAddress Thermometer;
 uint32_t u32_temp_conversiontime = 0u;
 uint32_t u32_last_temp_read_time[MAX_NOF_TEMP_SENSORS] = {0u};
-float_t af_temp_in_grad[MAX_NOF_TEMP_SENSORS] = {-127.0f};
+float_t af_temp_in_grad[MAX_NOF_TEMP_SENSORS] = {0.0f};
 float_t f_temp_in_grad_last_publish = 0.0f;
 uint8_t au8_temp_sens_addr[MAX_NOF_TEMP_SENSORS][8] = {0};
 uint8_t u8_temp_sens_device_count = 0;
@@ -321,11 +330,12 @@ void setup() {
 
   // ACHTUNG: RX und TX Pin werden als GPIOs umdefiniert!
   shift_register_obj.begin(SHIFT_REGISTER_DATA_PIN_NO, SHIFT_REGISTER_CLOCK_PIN_NO, SHIFT_REGISTER_OUTPUT_PIN_NO);
-  shift_register_obj.set(7, LOW);
-  // pinMode(D1, OUTPUT);
-  // digitalWrite(D1, schalterzustand);
-  // Serial.begin(9600);
-  // while (!Serial);
+  // Setze alle Pins die das Relais Modul ansteuern auf 1 damit sie im Default Zustand keinen Strom ziehen.
+  shift_register_obj.setNoUpdate(FAN0_MAIN_OUTPUT_PIN_NUMBER, RELAY_OFF_VALUE);
+  shift_register_obj.setNoUpdate(FAN0_BACKUP_OUTPUT_PIN_NUMBER, RELAY_OFF_VALUE);
+  shift_register_obj.setNoUpdate(HEATING0_MAIN_OUTPUT_PIN_NUMBER, RELAY_OFF_VALUE);
+  shift_register_obj.setNoUpdate(HEATING0_BACKUP_OUTPUT_PIN_NUMBER, RELAY_OFF_VALUE);
+  shift_register_obj.updateRegisters();
 
   Serial.println("CAN Sender");
   CAN.setPins(SPI_CS_PIN_FOR_CAN_MPC2515, 2); // Interrupt PIN wird nicht genutzt und kann auf default 2 stehen bleiben
@@ -356,7 +366,7 @@ void loop() {
   s_batt_pack_data.u16_error_bitfield = u16_error_bitfield_after_can_send;
 
   // ############# Auslesen der analogen Messwerte #############################
-  //read_all_ADC_measurement_values(&s_batt_pack_data);
+  read_all_ADC_measurement_values(&s_batt_pack_data);
   // ############# Einlesen der Temperatursensoren #############################
   u16_errors = read_temperatures_from_all_connected_sensors(&s_batt_pack_data);
   // Polling muss so häufig wie möglich durchgeführt werden um keine Botschaften zu verpassen
@@ -368,6 +378,9 @@ void loop() {
   #if(DEBUG_PRINT_ON)
   print_temperatures_from_all_connected_sensors(&s_batt_pack_data);
   #endif
+
+  // Basierend auf den Messwerten und/oder Schalterzuständen reagiert die Steuerung. Z.B. wird die Heizung ein oder aus geschaltet, der Lüfter ein oder aus oder andere Tasks werden durchgeführt. Alles in control_battery()
+  control_battery();
 
   // ############# Fehlerbehandlung lokal fuer dieses Battery Pack #############################
   /* Warnung raushauen wenn die Batterie fast leer ist und der Luefter oder die Heizung aktiviert wurden.
@@ -399,8 +412,6 @@ void loop() {
   // Wenn die Kommunikationsverbindung zum Master abbricht soll der Controller möglichst eigenständig seine Aufgaben durchführen
   // In dieser Funktion wird alles erledigt was dazu nötig ist
   autonomous_mode_handler();
-  // Basierend auf den Messwerten und/oder Schalterzuständen reagiert die Steuerung. Z.B. wird die Heizung ein oder aus geschaltet, der Lüfter ein oder aus oder andere Tasks werden durchgeführt. Alles in control_battery()
-  control_battery();
 
   // Messung der Skriptlaufzeit ohne die Pollingschleife
   uint32_t u32_microseconds_end = micros();
@@ -488,6 +499,35 @@ uint16_t read_temperatures_from_all_connected_sensors(t_batt_pack_data *ps_batt_
   ps_batt_pack_data->f_temp_busbar_plus       = af_temp_in_grad[3];
   ps_batt_pack_data->f_temp_cable_shoe_1      = af_temp_in_grad[4];
   ps_batt_pack_data->f_temp_cable_shoe_2      = af_temp_in_grad[5];
+  if (u8_temp_sens_device_count != MAX_NOF_TEMP_SENSORS)
+  {
+    set_bit_16bit(&u16_status, ERROR_BIT_MISSING_TEMP_SENS_STARTUP);
+    #if (DEBUG_PRINT_ON)
+    Serial.println("");
+    Serial.print("At least one temperature sensor missing on controller startup.");
+    #endif
+    // Checke ob der fehlende Sensor mitlerweile angeschlossen wurde und erzeuge die Deviceliste neu
+    uint8_t u8_local_device_count = temp_sensors.getDeviceCount();
+    #if (DEBUG_PRINT_ON)
+    Serial.println("");
+    Serial.print("Anzahl gefundener Temperatursensoren: ");
+    Serial.print(u8_local_device_count);
+    #endif
+    if(u8_local_device_count != u8_temp_sens_device_count)
+    {
+      u8_temp_sens_device_count = u8_local_device_count;
+      for (uint8_t i = 0;  i < u8_temp_sens_device_count;  i++)
+      {
+        #if(DEBUG_PRINT_ON)
+        Serial.print("Temperatursensoren werden registriert: ");
+        Serial.print((int)i+1);
+        Serial.print(" : ");
+        #endif
+        temp_sensors.getAddress(au8_temp_sens_addr[i], i);
+        u32_last_temp_read_time[i] = millis();
+      }
+    }
+  }
   return u16_status;
 }
 
@@ -503,6 +543,7 @@ void print_temperatures_from_all_connected_sensors(t_batt_pack_data *ps_batt_pac
     Serial.print(af_temp_in_grad[u8_i]);
     Serial.print("C");
   }
+  Serial.println("");
 }
 #endif
 //+++++ Funktionen für den ADC Channel Umschalter +++++++++++++
@@ -725,8 +766,8 @@ uint16_t can_send_batt_pack_data(t_batt_pack_data *ps_batt_pack_data)
   i_can_begin_end_ret_val &= CAN.beginPacket(CAN_SEND_RASPI_ARBITRATION_ID_2BYTE_SUB_ID);
   if(i_can_begin_end_ret_val == CAN_LIB_RET_VAL_OK)
   {
-    // Temperatursensor Busbar Plus
-    i16_from_float = float_to_fixed(ps_batt_pack_data->f_fan_current, FIXED_POINT_FRACTIONAL_BITS_MAX128);
+    // 
+    i16_from_float = float_to_fixed(ps_batt_pack_data->f_fan_current, FIXED_POINT_FRACTIONAL_BITS_MAX32);
     split_16bit_number_into_8bit_int16(i16_from_float, au8_split_from_u16);
     can_write_ret_val &= CAN.write(au8_split_from_u16[1]);
     can_write_ret_val &= CAN.write(au8_split_from_u16[0]);
@@ -736,8 +777,8 @@ uint16_t can_send_batt_pack_data(t_batt_pack_data *ps_batt_pack_data)
     Serial.print(au8_split_from_u16[0], HEX);
     Serial.print(" ");
     #endif
-    // Temperatursensor Kabelschuh 1 des Verbindungskabels
-    i16_from_float = float_to_fixed(ps_batt_pack_data->f_heating_current, FIXED_POINT_FRACTIONAL_BITS_MAX128);
+    // 
+    i16_from_float = float_to_fixed(ps_batt_pack_data->f_heating_current, FIXED_POINT_FRACTIONAL_BITS_MAX32);
     split_16bit_number_into_8bit_int16(i16_from_float, au8_split_from_u16);
     can_write_ret_val &= CAN.write(au8_split_from_u16[1]);
     can_write_ret_val &= CAN.write(au8_split_from_u16[0]);
@@ -747,8 +788,8 @@ uint16_t can_send_batt_pack_data(t_batt_pack_data *ps_batt_pack_data)
     Serial.print(au8_split_from_u16[0], HEX);
     Serial.print(" ");
     #endif
-    // Temperatursensor Kabelschuh 2 des Verbindungskabels
-    i16_from_float = float_to_fixed(ps_batt_pack_data->f_voltage_sens_battery_pack, FIXED_POINT_FRACTIONAL_BITS_MAX128);
+    // 
+    i16_from_float = float_to_fixed(ps_batt_pack_data->f_voltage_sens_battery_pack, FIXED_POINT_FRACTIONAL_BITS_MAX64);
     split_16bit_number_into_8bit_int16(i16_from_float, au8_split_from_u16);
     can_write_ret_val &= CAN.write(au8_split_from_u16[1]);
     can_write_ret_val &= CAN.write(au8_split_from_u16[0]);
@@ -933,6 +974,7 @@ uint16_t create_can_id_from_device_id(uint8_t u8_device_id)
 
 void read_multi_temp_non_blocking_with_wait_time(uint32_t u32_wait_time_millis)
 {
+  bool b_new_temp_request_send = false;
   for(uint8_t u8_i=0u; u8_i < u8_temp_sens_device_count; u8_i++)
   {
     // Wenn die eingestellte Wartezeit für die nächste Temperaturmessung abgelaufen ist
@@ -942,8 +984,12 @@ void read_multi_temp_non_blocking_with_wait_time(uint32_t u32_wait_time_millis)
       if ( (millis() - u32_last_temp_read_time[u8_i]) > u32_temp_conversiontime)
       {
         af_temp_in_grad[u8_i] = temp_sensors.getTempC(au8_temp_sens_addr[u8_i]);
-        temp_sensors.requestTemperatures();                    // ask for next reading 
-        u32_last_temp_read_time[u8_i] = millis();   
+        u32_last_temp_read_time[u8_i] = millis(); 
+        if(b_new_temp_request_send == false)
+        {
+          temp_sensors.requestTemperatures();                    // ask for next reading 
+          b_new_temp_request_send = true;
+        }  
       }
     }
   }
@@ -1149,9 +1195,9 @@ void control_battery()
   // Wenn der Schalterzustand von Lüfter, Heizung etc. durch interne oder externe Kontrolle geändert wurde
   if(s_batt_pack_states.b_val_changed == true)
   {
-    //...schalte die Output PINs entsprechend um die Relais zu schalten
-    shift_register_obj.setNoUpdate((int)s_batt_pack_states.b_fan_switch, FAN0_OUTPUT_PIN_NUMBER);
-    shift_register_obj.setNoUpdate((int)s_batt_pack_states.b_heating_switch, HEATING0_OUTPUT_PIN_NUMBER);
+    //...schalte die Output PINs entsprechend um die Relais zu schalten - inverse Logik (!) weil die Relays aus sind bei 1 und an sind bei 0
+    shift_register_obj.setNoUpdate(FAN0_MAIN_OUTPUT_PIN_NUMBER, (int)!s_batt_pack_states.b_fan_switch);
+    shift_register_obj.setNoUpdate(HEATING0_MAIN_OUTPUT_PIN_NUMBER, (int)!s_batt_pack_states.b_heating_switch);
     shift_register_obj.updateRegisters();
 
     #if(DEBUG_PRINT_ON)
